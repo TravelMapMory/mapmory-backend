@@ -1,4 +1,4 @@
-// Command server runs the UniMap backend HTTP service.
+// Command server runs the MapMory backend HTTP service.
 package main
 
 import (
