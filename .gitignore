@@ -1,0 +1,18 @@
+# Compiled binaries
+*.exe
+*.dll
+*.so
+*.dylib
+/server
+/cmd/server/server
+
+# Test and coverage output
+*.test
+*.out
+coverage.txt
+
+# Local environment
+.env
+
+# macOS
+.DS_Store
