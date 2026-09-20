@@ -27,4 +27,4 @@ jobs:
         run: go test ./...
 
       - name: Docker build
-        run: docker build -t unimap-backend:ci .
+        run: docker build -t mapmory-backend:ci .

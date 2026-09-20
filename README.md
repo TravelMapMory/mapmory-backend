@@ -1,6 +1,6 @@
-# UniMap (backend)
+# MapMory (backend)
 
-UniMap is a photo-first travel-memory app. The backend stores uploaded photos and
+MapMory is a photo-first travel-memory app. The backend stores uploaded photos and
 extracts their geolocation and timestamp from EXIF metadata, so memories place
 themselves on a map without manual tagging. On top of that it serves the
 map-based main view, a search bar that filters existing content, flexible
@@ -37,13 +37,13 @@ go test ./...
 Build the image:
 
 ```sh
-docker build -t unimap-backend .
+docker build -t mapmory-backend .
 ```
 
 Run it, mapping the container port to the host:
 
 ```sh
-docker run --rm -p 8080:8080 unimap-backend
+docker run --rm -p 8080:8080 mapmory-backend
 ```
 
 Check the health endpoint against the running container:
