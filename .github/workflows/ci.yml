@@ -4,18 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.1'
-          cache: true
+          go-version: '1.26.x'
+          # Caching is off, not merely unset: the input defaults to true, and
+          # with no dependencies there is no go.sum for it to key on, so every
+          # run logs a "Restore cache failed" warning and caches nothing.
+          cache: false
 
       - name: Vet
         run: go vet ./...

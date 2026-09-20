@@ -4,3 +4,10 @@ README.md
 Dockerfile
 .dockerignore
 .gitignore
+
+# Keep local-only files out of the build context. They never reach the final
+# image, but COPY would otherwise pull them into the build stage and its cache.
+.env
+/server
+/cmd/server/server
+.DS_Store
