@@ -1,0 +1,103 @@
+#cloud-config
+# User data for the mapmory-web VM (Container-Optimized OS). COS applies it on
+# every boot, so editing this file and resetting the VM is the whole redeploy
+# story for the host itself. App releases need no VM access: CI pushes
+# :main images and mapmory-update.timer picks them up within a minute.
+write_files:
+  - path: /etc/mapmory/Caddyfile
+    permissions: '0644'
+    content: |
+      # TLS for mapmory.app (Let's Encrypt, state kept in /data). /api/* goes
+      # to the Go API, everything else to nginx serving the React build.
+      mapmory.app {
+          encode zstd gzip
+          handle /api/* {
+              reverse_proxy api:8080
+          }
+          handle {
+              reverse_proxy web:8080
+          }
+      }
+
+      www.mapmory.app {
+          redir https://mapmory.app{uri} permanent
+      }
+
+  - path: /etc/mapmory/update.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Pulls the newest :main images from Artifact Registry and restarts any
+      # container whose image changed. Run every minute by mapmory-update.timer.
+      set -uo pipefail
+
+      REG=europe-north1-docker.pkg.dev/mapmory-2026/mapmory
+
+      # Starts container NAME from IMAGE (extra args go to docker run) unless
+      # NAME already runs that exact image; a missing image is skipped quietly.
+      ensure() {
+        local name=$1 image=$2
+        shift 2
+        local want have
+        want=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null) || return 0
+        have=$(docker inspect -f '{{.Image}}' "$name" 2>/dev/null)
+        [ "$want" = "$have" ] && return 0
+        docker rm -f "$name" >/dev/null 2>&1
+        docker run -d --name "$name" --network mapmory --restart unless-stopped "$@" "$image" >/dev/null \
+          && echo "started $name ($want)"
+      }
+
+      docker network inspect mapmory >/dev/null 2>&1 || docker network create mapmory >/dev/null
+
+      for app in api web; do
+        docker pull -q "$REG/$app:main" >/dev/null || echo "pull failed: $app"
+        ensure "$app" "$REG/$app:main"
+      done
+
+      # Caddy starts only once this VM is mapmory.app's sole A record (checked over DNS-over-HTTPS, COS ships no getent/dig), so Let's Encrypt never gets a request it cannot validate.
+      ip=$(curl -sf -m 10 -H 'Metadata-Flavor: Google' \
+        http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)
+      ans=$(curl -sf -m 10 'https://dns.google/resolve?name=mapmory.app&type=A' | grep -o '"data":"[^"]*"')
+      if [ -n "$ip" ] && [ "$ans" = "\"data\":\"$ip\"" ]; then
+        # Refreshed daily rather than every minute, to stay under Docker Hub's anonymous pull limit.
+        stamp=/var/lib/mapmory/caddy.pulled
+        if [ $(( $(date +%s) - $(stat -c %Y "$stamp" 2>/dev/null || echo 0) )) -gt 86400 ]; then
+          docker pull -q caddy:2 >/dev/null && touch "$stamp"
+        fi
+        # The directory, not the file, is mounted: on reboot dockerd restarts Caddy before cloud-init rewrites /etc, and a missing file mount source would be created as a directory.
+        ensure caddy caddy:2 -p 80:80 -p 443:443 \
+          -v /etc/mapmory:/etc/caddy:ro -v /var/lib/mapmory/caddy:/data
+      fi
+
+      docker image prune -f >/dev/null
+
+  - path: /etc/systemd/system/mapmory-update.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Pull new MapMory images and restart changed containers
+      Wants=network-online.target docker.service
+      After=network-online.target docker.service
+
+      [Service]
+      Type=oneshot
+      TimeoutStartSec=5min
+      Environment=HOME=/home/cloudservice
+      ExecStartPre=/bin/mkdir -p /home/cloudservice /var/lib/mapmory/caddy
+      ExecStartPre=/usr/bin/docker-credential-gcr configure-docker --registries europe-north1-docker.pkg.dev
+      ExecStart=/bin/bash /etc/mapmory/update.sh
+
+  - path: /etc/systemd/system/mapmory-update.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Run mapmory-update every minute
+
+      [Timer]
+      OnBootSec=15s
+      OnUnitActiveSec=60s
+      AccuracySec=5s
+
+runcmd:
+  - systemctl daemon-reload
+  - systemctl start mapmory-update.timer

@@ -30,3 +30,46 @@ jobs:
 
       - name: Docker build
         run: docker build -t mapmory-backend:ci .
+
+  # Ships main to mapmory.app: pushes :<sha> and :main to Artifact Registry,
+  # and the VM (deploy/cloud-init.yaml) pulls the new :main within a minute.
+  # Auth is keyless (Workload Identity Federation); the provider only accepts
+  # refs/heads/main pushes to this org's two repos.
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # One deploy at a time per repo; together with the tip-of-main check below, :main never moves backwards.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE: europe-north1-docker.pkg.dev/mapmory-2026/mapmory/api
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/1025024571915/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: mapmory-deployer@mapmory-2026.iam.gserviceaccount.com
+          token_format: access_token
+          create_credentials_file: false
+
+      - name: Push image
+        env:
+          TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin https://europe-north1-docker.pkg.dev
+          docker build -t "$IMAGE:$GITHUB_SHA" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          # A slow or re-run job for an older commit must not roll production back, so :main moves only while this commit is still main's tip.
+          if [ "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA" ]; then
+            docker tag "$IMAGE:$GITHUB_SHA" "$IMAGE:main"
+            docker push "$IMAGE:main"
+          else
+            echo "::notice::main has moved past $GITHUB_SHA; leaving :main as it is"
+          fi
