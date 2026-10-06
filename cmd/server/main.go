@@ -2,16 +2,33 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 )
 
+// healthResponse is the JSON response for the health endpoint.
+type healthResponse struct {
+	Status string `json:"status"`
+}
+
+// writeJSON writes a JSON response with the given status code and value.
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("encode JSON response: %v", err)
+	}
+}
+
 // healthHandler answers liveness probes with a fixed JSON document so that
 // deployment platforms and CI can confirm the process is serving traffic.
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok"}`))
+	writeJSON(w, http.StatusOK, healthResponse{
+		Status: "ok",
+	})
 }
 
 // newHandler returns a handler that serves the health endpoint.
