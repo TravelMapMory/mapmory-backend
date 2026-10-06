@@ -14,6 +14,14 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
+// newHandler returns a handler that serves the health endpoint.
+func newHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", healthHandler)
+
+	return mux
+}
+
 // listenAddr returns the address to bind, honouring the PORT variable that
 // hosted environments inject and falling back to 8080 for local runs.
 func listenAddr() string {
@@ -26,12 +34,9 @@ func listenAddr() string {
 
 // main wires the routes and serves until the listener fails.
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthHandler)
-
 	addr := listenAddr()
 	log.Printf("listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, newHandler()); err != nil {
 		log.Fatal(err)
 	}
 }
