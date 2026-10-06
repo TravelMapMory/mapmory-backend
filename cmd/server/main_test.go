@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,7 +21,14 @@ func TestHealthHandler(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Errorf("Content-Type = %q, want %q", got, "application/json")
 	}
-	if got := rec.Body.String(); got != `{"status":"ok"}` {
-		t.Errorf("body = %q, want %q", got, `{"status":"ok"}`)
+
+	var got healthResponse
+
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+
+	if got.Status != "ok" {
+		t.Errorf("status = %q, want %q", got.Status, "ok")
 	}
 }
