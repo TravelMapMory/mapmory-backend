@@ -45,19 +45,20 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// listTripsHandler returns a JSON document with an empty list of trips and a nil next_cursor.
+// listTripsHandler returns a JSON document with the list of trips and a next_cursor
+// field that is always null, since pagination is not implemented yet.
 func (s *server) listTripsHandler(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
 	writeJSON(w, http.StatusOK, tripPage{
-		Items:      []trip{},
+		Items:      s.trips.list(),
 		NextCursor: nil,
 	})
 }
 
-// createTripHandler handles the creation of a new trip. It validates the request body
-// and title, returning appropriate error responses for invalid input.
+// createTripHandler creates a new trip with the given title and notes, returning the
+// created trip as JSON.
 func (s *server) createTripHandler(
 	w http.ResponseWriter,
 	r *http.Request,
