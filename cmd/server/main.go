@@ -10,9 +10,8 @@ import (
 	"unicode/utf8"
 )
 
-// healthResponse is the JSON response for the health endpoint.
-type healthResponse struct {
-	Status string `json:"status"`
+type server struct {
+	trips *memoryTripStore
 }
 
 // writeJSON writes a JSON response with the given status code and value.
@@ -43,9 +42,11 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// listTripsHandler returns an empty list of trips for now, but it is a placeholder
-// for the future implementation of the trips listing endpoint.
-func listTripsHandler(w http.ResponseWriter, r *http.Request) {
+// listTripsHandler returns a JSON document with an empty list of trips and a nil next_cursor.
+func (s *server) listTripsHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	writeJSON(w, http.StatusOK, tripPage{
 		Items:      []trip{},
 		NextCursor: nil,
@@ -53,8 +54,11 @@ func listTripsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // createTripHandler handles the creation of a new trip. It validates the request body
-// and responds with appropriate error messages if the input is invalid.
-func createTripHandler(w http.ResponseWriter, r *http.Request) {
+// and title, returning appropriate error responses for invalid input.
+func (s *server) createTripHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	var input createTripRequest
 
 	decoder := json.NewDecoder(r.Body)
@@ -95,12 +99,17 @@ func createTripHandler(w http.ResponseWriter, r *http.Request) {
 	input.Title = title
 }
 
-// newHandler returns a handler that serves the health endpoint.
+// newHandler creates a new HTTP handler with the necessary routes and handlers
+// for the MapMory backend service.
 func newHandler() http.Handler {
+	s := &server{
+		trips: newMemoryTripStore(),
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler)
-	mux.HandleFunc("GET /api/trips", listTripsHandler)
-	mux.HandleFunc("POST /api/trips", createTripHandler)
+	mux.HandleFunc("GET /api/trips", s.listTripsHandler)
+	mux.HandleFunc("POST /api/trips", s.createTripHandler)
 
 	return mux
 }
