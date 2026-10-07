@@ -110,6 +110,8 @@ func (s *server) createTripHandler(
 		Cover:      nil,
 	}
 
+	s.trips.add(created)
+
 	writeJSON(w, http.StatusCreated, created)
 }
 
