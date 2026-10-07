@@ -33,6 +33,8 @@ func TestHealthHandler(t *testing.T) {
 	}
 }
 
+// TestListTripsEmpty checks that the trips listing endpoint returns an empty list of trips
+// and a nil next_cursor when there are no trips.
 func TestListTripsEmpty(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/trips", nil)
 	rec := httptest.NewRecorder()
