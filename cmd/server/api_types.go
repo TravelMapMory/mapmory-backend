@@ -20,3 +20,8 @@ type displayImage struct {
 	URL       string    `json:"url"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
+
+type tripPage struct {
+	Items      []trip  `json:"items"`
+	NextCursor *string `json:"next_cursor"`
+}

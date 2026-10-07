@@ -31,10 +31,20 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// listTripsHandler returns an empty list of trips for now, but it is a placeholder
+// for the future implementation of the trips listing endpoint.
+func listTripsHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, tripPage{
+		Items:      []trip{},
+		NextCursor: nil,
+	})
+}
+
 // newHandler returns a handler that serves the health endpoint.
 func newHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler)
+	mux.HandleFunc("GET /api/trips", listTripsHandler)
 
 	return mux
 }
