@@ -2,16 +2,133 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
+
+type server struct {
+	trips *memoryTripStore
+}
+
+// writeJSON writes a JSON response with the given status code and value.
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("encode JSON response: %v", err)
+	}
+}
+
+// writeError writes a JSON error response with the given status code, error code, and message.
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, errorResponse{
+		Error: errorDetail{
+			Code:    code,
+			Message: message,
+		},
+	})
+}
 
 // healthHandler answers liveness probes with a fixed JSON document so that
 // deployment platforms and CI can confirm the process is serving traffic.
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok"}`))
+	writeJSON(w, http.StatusOK, healthResponse{
+		Status: "ok",
+	})
+}
+
+// listTripsHandler returns a JSON document with the list of trips and a next_cursor
+// field that is always null, since pagination is not implemented yet.
+func (s *server) listTripsHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	writeJSON(w, http.StatusOK, tripPage{
+		Items:      s.trips.list(),
+		NextCursor: nil,
+	})
+}
+
+// createTripHandler creates a new trip with the given title and notes, returning the
+// created trip as JSON.
+func (s *server) createTripHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	var input createTripRequest
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&input); err != nil {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"invalid request body",
+		)
+		return
+	}
+
+	title := strings.TrimSpace(input.Title)
+
+	if title == "" {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"title must not be blank",
+		)
+		return
+	}
+
+	if utf8.RuneCountInString(title) > 120 {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"title must be at most 120 characters",
+		)
+		return
+	}
+
+	input.Title = title
+
+	created := trip{
+		ID:         uuid.NewString(),
+		Title:      input.Title,
+		Notes:      input.Notes,
+		CreatedAt:  time.Now().UTC(),
+		PhotoCount: 0,
+		Cover:      nil,
+	}
+
+	s.trips.add(created)
+
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// newHandler creates a new HTTP handler with the necessary routes and handlers
+// for the MapMory backend service.
+func newHandler() http.Handler {
+	s := &server{
+		trips: newMemoryTripStore(),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", healthHandler)
+	mux.HandleFunc("GET /api/trips", s.listTripsHandler)
+	mux.HandleFunc("POST /api/trips", s.createTripHandler)
+
+	return mux
 }
 
 // listenAddr returns the address to bind, honouring the PORT variable that
@@ -26,12 +143,9 @@ func listenAddr() string {
 
 // main wires the routes and serves until the listener fails.
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthHandler)
-
 	addr := listenAddr()
 	log.Printf("listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, newHandler()); err != nil {
 		log.Fatal(err)
 	}
 }
