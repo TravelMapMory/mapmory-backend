@@ -6,7 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"uuid"
+
+	"github.com/google/uuid"
 )
 
 // TestHealthHandler checks the health endpoint's status, content type and body,
