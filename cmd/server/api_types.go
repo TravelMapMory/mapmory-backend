@@ -25,3 +25,8 @@ type tripPage struct {
 	Items      []trip  `json:"items"`
 	NextCursor *string `json:"next_cursor"`
 }
+
+type createTripRequest struct {
+	Title string `json:"title"`
+	Notes string `json:"notes"`
+}
