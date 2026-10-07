@@ -1,0 +1,703 @@
+openapi: 3.1.0
+info:
+  title: MapMory — minimal private-flow draft
+  version: 0.0.5
+  description: 'PROPOSED, pending team review. Covers owned trips and batch-shaped
+    photo upload. This is a discussion draft, not a production-ready contract. All
+    routes require a Firebase ID token; local user resolution happens on authenticated
+    requests. Map, geocoding, sharing, edits/deletion, retry routes and URL renewal
+    for upload are not defined here.
+
+
+    Open questions:
+
+    - How is POST /trips/{trip_id}/batches made safe to retry after a lost response:
+    Idempotency-Key or a client-generated batch ID?
+
+    - Does the server need an uploading state, and if so how does it learn that the
+    direct GCS upload started?
+
+    - How are interrupted processing, failed-photo retries and expired upload URLs
+    recovered?
+
+    - Confirm pagination, field names, input limits, status codes and photo-list ordering
+    with the UI.'
+  contact:
+    name: MapMory team
+    url: https://github.com/TravelMapMory
+servers:
+- url: http://localhost:8080/api
+  description: Proposed local API URL
+security:
+- firebaseBearer: []
+paths:
+  /trips:
+    get:
+      operationId: listTrips
+      summary: List the current user’s trips
+      parameters:
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor from the previous response. An invalid cursor returns
+          400.
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+        description: Maximum number of items to return in this page.
+      description: 'Newest first, ordered by created_at then id. Empty collections
+        return items: [] and next_cursor: null.'
+      responses:
+        '200':
+          description: List the current user’s trips
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TripPage'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Trips
+    post:
+      operationId: createTrip
+      summary: Create a private trip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTrip'
+      description: Ownership comes from the verified identity. Initial cover is null
+        and photo_count is zero.
+      responses:
+        '201':
+          description: Create a private trip
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Trips
+  /trips/{trip_id}:
+    parameters:
+    - name: trip_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getTrip
+      summary: Get an owned trip
+      responses:
+        '200':
+          description: Get an owned trip
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Trips
+      description: Return an owned trip, including its photo count and optional cover.
+        Return 404 if the trip is absent or belongs to another user.
+  /trips/{trip_id}/photos:
+    parameters:
+    - name: trip_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: listTripPhotos
+      summary: List photos, including unlocated photos
+      parameters:
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor from the previous response. An invalid cursor returns
+          400.
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+        description: Maximum number of items to return in this page.
+      description: 'Newest uploaded first; pending photos last. Use id as a stable
+        tie-breaker. Empty collections return items: [] and next_cursor: null. Ordering
+        is provisional.'
+      responses:
+        '200':
+          description: List photos, including unlocated photos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotoPage'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Photos
+  /trips/{trip_id}/batches:
+    parameters:
+    - name: trip_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      operationId: registerBatch
+      summary: Register files and obtain signed upload URLs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterUpload'
+      description: JPEG/PNG only, at most 25,000,000 bytes per file (proposed interpretation
+        of 25 MB). Unsupported type/size produces a per-file rejection; malformed
+        requests or duplicate client_file_id values return 400. Initial limits are
+        provisional. Retrying batch creation after a lost response is unresolved;
+        do not assume this POST is idempotent. Results are grouped into accepted_files
+        and rejected_files; both arrays are present even if empty. The batch may be
+        empty when every file is rejected.
+      responses:
+        '201':
+          description: Register files and obtain signed upload URLs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisteredBatch'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Uploads
+  /batches/{batch_id}:
+    parameters:
+    - name: batch_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getBatch
+      summary: Get owned batch and per-photo status
+      responses:
+        '200':
+          description: Get owned batch and per-photo status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Batch'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Uploads
+      description: Return the owned batch and its registered photos, including processing
+        states and errors. Use this response to restore upload status after a reload;
+        rejected files are not registered photo records.
+  /batches/{batch_id}/files/{client_file_id}/complete:
+    parameters:
+    - name: batch_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    - name: client_file_id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: completeUpload
+      summary: Process an uploaded file and return its photo
+      description: 'No request body. Check ownership and object existence, then process
+        within this request. A processed photo returns its current record without
+        reprocessing. A concurrently processing photo or missing uploaded object returns
+        409. Image validation failure returns 200 with state: failed and an error_code,
+        because the failure is persisted on the photo. Recovery from an interrupted
+        processing attempt is pending review.'
+      responses:
+        '200':
+          description: Process an uploaded file and return its photo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Photo'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          $ref: '#/components/responses/409'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Uploads
+components:
+  securitySchemes:
+    firebaseBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    '400':
+      description: 'Invalid request; error.code: invalid_request.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '401':
+      description: 'Missing or invalid Firebase ID token; error.code: unauthenticated.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '404':
+      description: 'Resource does not exist or is inaccessible to this user; error.code:
+        not_found.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '409':
+      description: 'Upload state prevents completion; error.code: upload_missing or
+        processing_in_progress.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '500':
+      description: 'Unexpected server error; error.code: internal_error. Do not expose
+        implementation details.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+      title: Error
+    CreateTrip:
+      type: object
+      required:
+      - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Trim surrounding whitespace; reject blank titles.
+        notes:
+          type: string
+          default: ''
+      additionalProperties: false
+      title: CreateTrip
+    Trip:
+      type: object
+      required:
+      - id
+      - title
+      - notes
+      - created_at
+      - photo_count
+      - cover
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        photo_count:
+          type: integer
+          minimum: 0
+        cover:
+          $ref: '#/components/schemas/TripCover'
+      title: Trip
+    DisplayImage:
+      type: object
+      required:
+      - url
+      - expires_at
+      properties:
+        url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+      description: Temporary owner-only display-image URL. Refetch the photo list
+        or batch to refresh expired URLs. No original image URL is returned.
+      title: DisplayImage
+    Photo:
+      type: object
+      required:
+      - id
+      - trip_id
+      - batch_id
+      - client_file_id
+      - state
+      - error_code
+      - uploaded_at
+      - capture_time_local
+      - capture_utc_offset
+      - exif_lat
+      - exif_lng
+      - lat
+      - lng
+      - display_image
+      properties:
+        id:
+          type: string
+          format: uuid
+        trip_id:
+          type: string
+          format: uuid
+        batch_id:
+          type: string
+          format: uuid
+        client_file_id:
+          type: string
+        state:
+          $ref: '#/components/schemas/PhotoState'
+        error_code:
+          type:
+          - string
+          - 'null'
+        uploaded_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        capture_time_local:
+          type:
+          - string
+          - 'null'
+          description: Local camera wall time; no implied UTC offset. Not an RFC 3339
+            instant.
+          examples:
+          - '2025-07-14T09:30:00'
+        capture_utc_offset:
+          type:
+          - string
+          - 'null'
+          pattern: ^[+-][0-9]{2}:[0-9]{2}$
+          examples:
+          - +09:00
+        exif_lat:
+          type:
+          - number
+          - 'null'
+          minimum: -90
+          maximum: 90
+        exif_lng:
+          type:
+          - number
+          - 'null'
+          minimum: -180
+          maximum: 180
+        lat:
+          type:
+          - number
+          - 'null'
+          minimum: -90
+          maximum: 90
+        lng:
+          type:
+          - number
+          - 'null'
+          minimum: -180
+          maximum: 180
+        display_image:
+          $ref: '#/components/schemas/NullableDisplayImage'
+      description: Owner representation. Both fields in each coordinate pair are set
+        together or null together. EXIF coordinates are immutable after import; lat/lng
+        are effective coordinates. Unknown metadata is explicitly null.
+      title: Photo
+    Batch:
+      type: object
+      required:
+      - id
+      - trip_id
+      - photos
+      properties:
+        id:
+          type: string
+          format: uuid
+        trip_id:
+          type: string
+          format: uuid
+        photos:
+          type: array
+          items:
+            $ref: '#/components/schemas/Photo'
+      title: Batch
+    UploadFile:
+      type: object
+      required:
+      - client_file_id
+      - size_bytes
+      - content_type
+      properties:
+        client_file_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+        size_bytes:
+          type: integer
+          minimum: 1
+        content_type:
+          type: string
+      additionalProperties: false
+      title: UploadFile
+    RegisterUpload:
+      type: object
+      required:
+      - files
+      properties:
+        files:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/UploadFile'
+      additionalProperties: false
+      title: RegisterUpload
+    UploadTarget:
+      type: object
+      required:
+      - method
+      - url
+      - headers
+      - expires_at
+      properties:
+        method:
+          $ref: '#/components/schemas/UploadMethod'
+        url:
+          type: string
+          format: uri
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+      description: Send image bytes directly to this URL using the returned method
+        and headers. The browser does not attach its Firebase bearer token to GCS.
+      title: UploadTarget
+    AcceptedFile:
+      type: object
+      required:
+      - client_file_id
+      - photo_id
+      - upload
+      properties:
+        client_file_id:
+          type: string
+        photo_id:
+          type: string
+          format: uuid
+        upload:
+          $ref: '#/components/schemas/UploadTarget'
+      additionalProperties: false
+      title: AcceptedFile
+    RejectedFile:
+      type: object
+      required:
+      - client_file_id
+      - error
+      properties:
+        client_file_id:
+          type: string
+        error:
+          $ref: '#/components/schemas/UploadRejectionError'
+      additionalProperties: false
+      title: RejectedFile
+    RegisteredBatch:
+      title: RegisteredBatch
+      type: object
+      description: Each requested client_file_id appears exactly once across accepted_files
+        and rejected_files. Both arrays are always present; either may be empty. Only
+        accepted files have registered photo records and upload targets.
+      required:
+      - batch_id
+      - accepted_files
+      - rejected_files
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        accepted_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/AcceptedFile'
+        rejected_files:
+          type: array
+          items:
+            $ref: '#/components/schemas/RejectedFile'
+      additionalProperties: false
+    TripPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Trip'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+      title: TripPage
+    PhotoPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Photo'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+      title: PhotoPage
+    TripCover:
+      type:
+      - object
+      - 'null'
+      required:
+      - photo_id
+      - image
+      properties:
+        photo_id:
+          type: string
+          format: uuid
+        image:
+          $ref: '#/components/schemas/DisplayImage'
+      title: TripCover
+    NullableDisplayImage:
+      type:
+      - object
+      - 'null'
+      required:
+      - url
+      - expires_at
+      properties:
+        url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+      title: NullableDisplayImage
+    ErrorDetail:
+      type: object
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      title: ErrorDetail
+    UploadRejectionError:
+      type: object
+      required:
+      - code
+      - message
+      properties:
+        code:
+          $ref: '#/components/schemas/UploadRejectionCode'
+        message:
+          type: string
+      title: UploadRejectionError
+    PhotoState:
+      type: string
+      enum:
+      - pending
+      - uploading
+      - processing
+      - ready
+      - needs-location
+      - failed
+      description: Provisional state model. ready means a display image and usable
+        coordinates; needs-location means a display image without usable coordinates.
+        uploading persistence is pending review.
+      title: PhotoState
+    UploadMethod:
+      type: string
+      enum:
+      - PUT
+      title: UploadMethod
+    UploadRejectionCode:
+      type: string
+      enum:
+      - unsupported_type
+      - file_too_large
+      title: UploadRejectionCode
+tags:
+- name: Trips
+  description: Private trips owned by the authenticated user
+- name: Photos
+  description: Owner photo listings
+- name: Uploads
+  description: File registration, completion and status
