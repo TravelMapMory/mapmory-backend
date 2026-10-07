@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 type server struct {
@@ -97,6 +100,17 @@ func (s *server) createTripHandler(
 	}
 
 	input.Title = title
+
+	created := trip{
+		ID:         uuid.NewString(),
+		Title:      input.Title,
+		Notes:      input.Notes,
+		CreatedAt:  time.Now().UTC(),
+		PhotoCount: 0,
+		Cover:      nil,
+	}
+
+	writeJSON(w, http.StatusCreated, created)
 }
 
 // newHandler creates a new HTTP handler with the necessary routes and handlers
