@@ -23,6 +23,16 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	}
 }
 
+// writeError writes a JSON error response with the given status code, error code, and message.
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, errorResponse{
+		Error: errorDetail{
+			Code:    code,
+			Message: message,
+		},
+	})
+}
+
 // healthHandler answers liveness probes with a fixed JSON document so that
 // deployment platforms and CI can confirm the process is serving traffic.
 func healthHandler(w http.ResponseWriter, r *http.Request) {

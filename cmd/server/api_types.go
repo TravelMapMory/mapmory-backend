@@ -30,3 +30,12 @@ type createTripRequest struct {
 	Title string `json:"title"`
 	Notes string `json:"notes"`
 }
+
+type errorResponse struct {
+	Error errorDetail `json:"error"`
+}
+
+type errorDetail struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
