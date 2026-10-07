@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"unicode/utf8"
 )
 
 // healthResponse is the JSON response for the health endpoint.
@@ -50,6 +52,8 @@ func listTripsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// createTripHandler handles the creation of a new trip. It validates the request body
+// and responds with appropriate error messages if the input is invalid.
 func createTripHandler(w http.ResponseWriter, r *http.Request) {
 	var input createTripRequest
 
@@ -57,9 +61,38 @@ func createTripHandler(w http.ResponseWriter, r *http.Request) {
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(&input); err != nil {
-		// temporary 400 handling
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"invalid request body",
+		)
 		return
 	}
+
+	title := strings.TrimSpace(input.Title)
+
+	if title == "" {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"title must not be blank",
+		)
+		return
+	}
+
+	if utf8.RuneCountInString(title) > 120 {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"title must be at most 120 characters",
+		)
+		return
+	}
+
+	input.Title = title
 }
 
 // newHandler returns a handler that serves the health endpoint.
