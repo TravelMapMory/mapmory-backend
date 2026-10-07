@@ -70,6 +70,99 @@ func TestListTripsEmpty(t *testing.T) {
 	}
 }
 
+// TestCreateTripValidation checks that the create trip endpoint returns appropriate
+// error responses for various invalid request bodies and titles.
+func TestCreateTripValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		message string
+	}{
+		{
+			name:    "malformed JSON",
+			body:    `{"title":`,
+			message: "invalid request body",
+		},
+		{
+			name:    "unknown field",
+			body:    `{"title":"Japan","titel":"oops"}`,
+			message: "invalid request body",
+		},
+		{
+			name:    "missing title",
+			body:    `{}`,
+			message: "title must not be blank",
+		},
+		{
+			name:    "blank title",
+			body:    `{"title":""}`,
+			message: "title must not be blank",
+		},
+		{
+			name:    "whitespace-only title",
+			body:    `{"title":"   "}`,
+			message: "title must not be blank",
+		},
+		{
+			name:    "title too long",
+			body:    `{"title":"` + strings.Repeat("a", 121) + `"}`,
+			message: "title must be at most 120 characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/api/trips",
+				strings.NewReader(tt.body),
+			)
+			req.Header.Set("Content-Type", "application/json")
+
+			rec := httptest.NewRecorder()
+
+			newHandler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf(
+					"status = %d, want %d",
+					rec.Code,
+					http.StatusBadRequest,
+				)
+			}
+
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Errorf(
+					"Content-Type = %q, want %q",
+					got,
+					"application/json",
+				)
+			}
+
+			var got errorResponse
+			if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+
+			if got.Error.Code != "invalid_request" {
+				t.Errorf(
+					"error.code = %q, want %q",
+					got.Error.Code,
+					"invalid_request",
+				)
+			}
+
+			if got.Error.Message != tt.message {
+				t.Errorf(
+					"error.message = %q, want %q",
+					got.Error.Message,
+					tt.message,
+				)
+			}
+		})
+	}
+}
+
 // TestCreateAndListTrip checks that a trip can be created and then listed,
 // verifying the fields of the created trip.
 func TestCreateAndListTrip(t *testing.T) {
