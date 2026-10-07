@@ -40,11 +40,24 @@ func listTripsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func createTripHandler(w http.ResponseWriter, r *http.Request) {
+	var input createTripRequest
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&input); err != nil {
+		// temporary 400 handling
+		return
+	}
+}
+
 // newHandler returns a handler that serves the health endpoint.
 func newHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler)
 	mux.HandleFunc("GET /api/trips", listTripsHandler)
+	mux.HandleFunc("POST /api/trips", createTripHandler)
 
 	return mux
 }
