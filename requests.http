@@ -1,0 +1,33 @@
+@baseUrl = http://localhost:8080
+
+### Health check
+GET {{baseUrl}}/healthz
+
+### List trips
+GET {{baseUrl}}/api/trips
+
+### Create trip
+POST {{baseUrl}}/api/trips
+Content-Type: application/json
+
+{
+  "title": "Japan",
+  "notes": "Summer trip"
+}
+
+### Invalid: blank title
+POST {{baseUrl}}/api/trips
+Content-Type: application/json
+
+{
+  "title": "   "
+}
+
+### Invalid: unknown field
+POST {{baseUrl}}/api/trips
+Content-Type: application/json
+
+{
+  "title": "Japan",
+  "titel": "typo"
+}
