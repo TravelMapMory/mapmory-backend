@@ -116,6 +116,24 @@ func (s *server) createTripHandler(
 	writeJSON(w, http.StatusCreated, created)
 }
 
+// getTripHandler returns an existing trip or a contract-shaped not_found error.
+func (s *server) getTripHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("trip_id")
+	// Invalid identifiers cannot name a trip. Keep the response indistinguishable
+	// from an unknown resource, rather than exposing a router-generated text 404.
+	if _, err := uuid.Parse(id); err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "trip not found")
+		return
+	}
+
+	found, ok := s.trips.get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", "trip not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, found)
+}
+
 // newHandler creates a new HTTP handler with the necessary routes and handlers
 // for the MapMory backend service.
 func newHandler() http.Handler {
@@ -127,6 +145,7 @@ func newHandler() http.Handler {
 	mux.HandleFunc("GET /healthz", healthHandler)
 	mux.HandleFunc("GET /api/trips", s.listTripsHandler)
 	mux.HandleFunc("POST /api/trips", s.createTripHandler)
+	mux.HandleFunc("GET /api/trips/{trip_id}", s.getTripHandler)
 
 	return mux
 }

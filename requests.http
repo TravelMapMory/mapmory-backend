@@ -31,3 +31,8 @@ Content-Type: application/json
   "title": "Japan",
   "titel": "typo"
 }
+### Get one trip (replace with the ID returned from Create trip)
+GET {{baseUrl}}/api/trips/{{tripId}}
+
+### Missing trip: contract-shaped JSON 404
+GET {{baseUrl}}/api/trips/00000000-0000-4000-8000-000000000000

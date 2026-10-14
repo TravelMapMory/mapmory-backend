@@ -278,3 +278,56 @@ func TestCreateAndListTrip(t *testing.T) {
 		)
 	}
 }
+
+// TestGetTrip verifies that a newly created trip is retrievable by its ID.
+func TestGetTrip(t *testing.T) {
+	handler := newHandler()
+	post := httptest.NewRecorder()
+	handler.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/api/trips", strings.NewReader(`{"title":"debugging"}`)))
+	if post.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", post.Code, post.Body.String())
+	}
+	var created trip
+	if err := json.Unmarshal(post.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	get := httptest.NewRecorder()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/trips/"+created.ID, nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status = %d: %s", get.Code, get.Body.String())
+	}
+	if got := get.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("content type = %q", got)
+	}
+	var result trip
+	if err := json.Unmarshal(get.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result != created {
+		t.Errorf("retrieved trip = %+v, want %+v", result, created)
+	}
+}
+
+func TestGetTripNotFound(t *testing.T) {
+	handler := newHandler()
+	for _, id := range []string{"00000000-0000-4000-8000-000000000000", "123"} {
+		t.Run(id, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/trips/"+id, nil))
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", rec.Code)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("content type = %q", ct)
+			}
+			var got errorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Error.Code != "not_found" {
+				t.Errorf("error code = %q, want not_found", got.Error.Code)
+			}
+		})
+	}
+}

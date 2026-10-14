@@ -29,3 +29,16 @@ func (s *memoryTripStore) list() []trip {
 
 	return trips
 }
+
+// get retrieves a trip by its ID without exposing the store's backing slice.
+func (s *memoryTripStore) get(id string) (trip, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, t := range s.trips {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return trip{}, false
+}
