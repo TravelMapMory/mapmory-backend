@@ -122,11 +122,14 @@ go test ./...
 Run additional checks before opening a PR:
 
 ```bash
+gofmt -l .
 go vet ./...
 go build ./...
 ```
 
-CI runs vet, build, tests, and a Docker image build. These checks do not establish production readiness or test Firebase, PostgreSQL, or Google Cloud Storage integration.
+`gofmt -l .` lists files that are not formatted and must print nothing; run `gofmt -w .` to fix them.
+
+CI runs a gofmt check, vet, build, tests, and a Docker image build. These checks do not establish production readiness or test Firebase, PostgreSQL, or Google Cloud Storage integration.
 
 ## Docker
 
