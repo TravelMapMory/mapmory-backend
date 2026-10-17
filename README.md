@@ -1,5 +1,7 @@
 # MapMory (Backend)
 
+See [Backend coding conventions](docs/coding-conventions.md) for repository expectations covering formatting, naming, error handling, HTTP handlers, and testing.
+
 MapMory is a photo-first travel-memory application. Its planned backend manages trips and photos, processes image metadata (including EXIF coordinates and capture times), and supports location-based browsing and sharing.
 
 This repository contains the **Go REST API**. The current implementation is an early prototype: it provides a health check and basic trip creation and retrieval with **in-memory storage**. Photo processing, Firebase authentication, and persistent storage are not implemented yet.
