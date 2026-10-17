@@ -5,6 +5,8 @@
 *.dylib
 /server
 /cmd/server/server
+/photometa
+/cmd/photometa/photometa
 
 # Test and coverage output
 *.test
