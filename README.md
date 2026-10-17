@@ -134,7 +134,11 @@ CI runs vet, build, tests, and a Docker image build. These checks do not establi
 
 ## Photo metadata inspection
 
-`photometa` prints the metadata MapMory depends on for one or more local JPEG or PNG files, so the team can compare a source photo with the original stored in Google Cloud Storage (frontend#13, backend#13).
+`photometa` is a standalone exploratory command for inspecting local JPEG and PNG files. It reports file size, SHA-256, EXIF GPS coordinates, and capture timestamps to help investigate image metadata, geolocation modelling, and upload diagnostics ([backend #13](https://github.com/TravelMapMory/mapmory-backend/issues/13)).
+
+The tool is not part of the production upload pipeline.
+
+See [Photo Metadata Experiments](docs/photo-metadata-experiments.md) for reproducible experiments, fixture explanations, real-image observations, and implications for the photo domain model.
 
 ```bash
 go run ./cmd/photometa <file>...
@@ -168,12 +172,12 @@ DateTimeOriginal:   "2025:07:15 18:05:42"
 OffsetTimeOriginal: missing
 ```
 
-(The sizes and digests change if the test images are regenerated.)
+The expected sizes and checksums correspond to the committed fixtures. They should remain unchanged when regenerated from the same generator unless the fixture contents change.
 
 How to read the output:
 
 - `missing` means the file does not carry that field, or the value is unusable (for example a GPS coordinate with a zero denominator, or one outside the valid range). A missing field is not an error.
-- `gps_latitude` and `gps_longitude` are signed WGS84 decimal degrees to 7 places (about 1 cm): north and east are positive, south and west negative. They are shown together or not at all.
+- `gps_latitude` and `gps_longitude` are signed decimal degrees displayed to seven decimal places. North and east are positive; south and west are negative. Both coordinates are reported together or marked missing.
 - `DateTimeOriginal` and `OffsetTimeOriginal` are the EXIF strings exactly as stored, in quotes. Labels in CamelCase are verbatim EXIF tags; labels in snake_case are derived values.
 - `size_bytes` and `sha256` describe the whole file. The digest matches `shasum -a 256 <file>`, so identical bytes give identical output.
 
@@ -181,14 +185,23 @@ Exit status is `0` when every file was read, `1` when any file failed (one `phot
 
 ### Comparing with a Google Cloud Storage original
 
-Download the object first, then compare the reports without the `file:` line:
+Download the object first, then compare the checksums:
 
 ```bash
-gcloud storage cp gs://<bucket>/<object> ./original.jpg
-diff <(go run ./cmd/photometa source.jpg | tail -n +2) <(go run ./cmd/photometa original.jpg | tail -n +2)
+gcloud storage cp gs://<bucket>/<object> ./downloaded-original.jpg
+
+shasum -a 256 source.jpg downloaded-original.jpg
 ```
 
-No output from `diff` means the bytes and all reported metadata match.
+Matching digests provide strong evidence that the files are byte-for-byte identical, including their embedded metadata.
+
+To inspect the metadata separately:
+
+```bash
+go run ./cmd/photometa source.jpg downloaded-original.jpg
+```
+
+This comparison applies to copies of the same original file, not resized or re-encoded derivatives.
 
 ### Limits
 
