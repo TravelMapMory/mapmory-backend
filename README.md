@@ -31,6 +31,14 @@ This repository contains the **Go REST API**. The current implementation is an e
 
 - Go 1.26.1 or newer (as declared in `go.mod`)
 
+### Firebase Authentication (development configuration)
+
+MapMory uses the shared Firebase project **`mapmory-development`**. Everyone can run their own frontend and backend locally. The frontend signs application users in through Firebase and sends a **Firebase ID token** to the API. Google Cloud **ADC service-account impersonation** is a separate way for a local backend to authenticate to Google APIs; its OAuth token is **not** a MapMory user token.
+
+For developer onboarding, see [Firebase Authentication — local development](docs/firebase-auth-setup.md): **start with the identity explanation**, then follow the teammate access request and keyless `gcloud` setup. Ki Chun currently administers the Firebase project; other teammates can implement frontend sign-in without Firebase Console access. Backend developers request narrowly scoped impersonation access on `mapmory-local-dev` through Google Cloud IAM.
+
+**Status:** The current API does not yet implement Firebase verification or trip ownership protection. Never treat the existing in-memory trip endpoints as private.
+
 ### Run locally
 
 From the repository root:
