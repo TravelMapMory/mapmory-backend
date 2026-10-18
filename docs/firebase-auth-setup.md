@@ -4,7 +4,7 @@
 **Authentication provider:** Firebase Email/Password  
 **Local backend credentials:** keyless Google Cloud service-account impersonation (no private-key downloads)
 
-> **Current state (18 October 2026):** The Firebase project, Email/Password provider, and Web app are configured. Ki Chun has verified local ADC impersonation. **Firebase authentication is not yet implemented in the Go API**; the current trip endpoints use in-memory data and do not enforce ownership.
+> **Current state (18 October 2026):** The Firebase project, Email/Password provider, and Web app are configured. Ki Chun has verified local ADC impersonation. **Firebase ID-token verification is now implemented for `GET /api/auth/me` and has been manually tested with a real Firebase user token.** The current trip endpoints still use in-memory data and do not enforce authentication or ownership.
 
 ## 1. The simplest mental model
 
@@ -71,7 +71,7 @@ Suggested message:
 
 > Could you give my Google account (`YOUR_EMAIL`) permission to impersonate `mapmory-local-dev` for local backend development? I only need Service Account Token Creator on that service account, not Firebase Console access.
 
-Wait for confirmation. See Section 4 for the administrator's grant commands.
+Wait for confirmation. See Section 8 for the administrator's grant commands.
 
 ### Step B — Configure Google Cloud CLI (once per laptop)
 
@@ -97,7 +97,7 @@ gcloud auth application-default print-access-token >/dev/null \
   && echo 'ADC impersonation works'
 ```
 
-If you see `ADC impersonation works`, Google Cloud accepted your identity and allowed you to obtain a short-lived OAuth access token for `mapmory-local-dev`. The Go client libraries can refresh it automatically. This **does not yet verify a Firebase user ID token**; that will be tested in the auth implementation issue.
+If you see `ADC impersonation works`, Google Cloud accepted your identity and allowed you to obtain a short-lived OAuth access token for `mapmory-local-dev`. The Go client libraries can refresh it automatically. This **does not verify a Firebase user ID token**. A separate real-token smoke test is described in Section 6.
 
 Do **not** print or share the access token. Don't copy your local `~/.config/gcloud/application_default_credentials.json` to teammates; each person generates their own ADC configuration.
 
@@ -112,11 +112,106 @@ unset GOOGLE_APPLICATION_CREDENTIALS
 go run ./cmd/server
 ```
 
-**Important:** the current backend ignores `FIREBASE_PROJECT_ID` because Firebase middleware hasn't been implemented yet. Once implemented, the Go Firebase Admin SDK will use that project ID to verify user tokens. `gcloud` ADC is discovered automatically when needed. `.env.example` is a reference, not an automatically loaded file.
+**Important:** the backend now requires `FIREBASE_PROJECT_ID` at startup and initializes the Firebase Admin SDK. The `/api/auth/me` route verifies user ID tokens. The existing trip endpoints are still unprotected. `gcloud` ADC is discovered automatically when needed. `.env.example` is a reference, not an automatically loaded file.
 
 The React frontend separately needs the registered **Firebase Web app configuration** (`apiKey`, `authDomain`, `projectId`, `appId`, etc.), provided by the project administrator. These identifiers are not service-account credentials. See the frontend's integration issue for wiring them into the Firebase Web SDK.
 
-## 4. For the administrator — grant or revoke teammate access
+## 4. Why we use keyless credentials
+
+The old alternative is downloading a **service-account private-key JSON file**. We **do not use that approach**. A private key is long-lived and can be copied or accidentally committed.
+
+Instead, Google Cloud CLI stores a *local impersonation configuration*. Your own Google login allows Google Cloud to issue temporary credentials as the named service account. **No service-account private key is downloaded.** Developers can be removed individually from the IAM policy.
+
+Do not generate, share, commit, or deploy service-account private keys. Never commit ADC files, OAuth access tokens, Firebase ID tokens, or test-user passwords. Deployed Google Cloud services should use their attached runtime identity rather than your local impersonation credentials.
+
+## 5. Troubleshooting
+
+| Symptom | Meaning / fix |
+| --- | --- |
+| ADC login said “Credentials saved,” but token test fails with `iam.serviceAccounts.getAccessToken denied` | You lack Token Creator on the target account, or the browser login used a different Google account. Request/check grant, then retry after IAM propagation. |
+| `NOT_FOUND` for `mapmory-local-dev` | Confirm project and service-account email with administrator. |
+| `gcloud auth application-default set-quota-project` says “not user credentials” | Expected for the impersonated ADC type. **Skip this command**; it is not a required setup step. |
+| Frontend developer cannot open Firebase Console | Normal if no separate Console role has been granted; the frontend can use the shared Web SDK config. |
+| OAuth token test passes, but Firebase middleware test fails | Different tests. Check the Firebase Admin SDK initialization, actual Firebase **ID token**, configured project ID, and whether extra API permissions are required. |
+
+## 6. Test with a real Firebase user ID token
+
+The backend now initializes the Admin SDK using `FIREBASE_PROJECT_ID`, and protects `GET /api/auth/me` with bearer-token middleware. Start the backend after completing Section 3:
+
+```bash
+export FIREBASE_PROJECT_ID=mapmory-development
+unset FIREBASE_AUTH_EMULATOR_HOST
+unset GOOGLE_APPLICATION_CREDENTIALS
+go run ./cmd/server
+```
+
+From another terminal, verify the public health route and the protected route:
+
+```bash
+curl -i http://localhost:8080/healthz       # 200
+curl -i http://localhost:8080/api/auth/me   # 401
+curl -i http://localhost:8080/api/auth/me \
+  -H 'Authorization: Bearer invalid'       # 401
+```
+
+For manual integration testing, use a disposable Firebase test account. Developers should preferably use their own test accounts, created through an authorized sign-up flow or provisioned by the project administrator. Do not share passwords through GitHub issues, documentation, or group chats.
+
+Open a second terminal while leaving the Go backend running in the first. In this second terminal, set `FIREBASE_WEB_API_KEY` using the registered Firebase Web app configuration, then run the following commands.
+
+```bash
+export FIREBASE_WEB_API_KEY='REPLACE_THIS_HERE'
+
+read -r 'TEST_EMAIL?Test user email: '
+read -rs 'TEST_PASSWORD?Test user password: '
+echo
+
+RESPONSE=$(jq -n --arg email "$TEST_EMAIL" --arg password "$TEST_PASSWORD" \
+  '{email: $email, password: $password, returnSecureToken: true}' | \
+  curl -fsS \
+    "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_WEB_API_KEY}" \
+    -H 'Content-Type: application/json' --data-binary @-)
+FIREBASE_ID_TOKEN=$(printf '%s' "$RESPONSE" | jq -r '.idToken // empty')
+test -n "$FIREBASE_ID_TOKEN" && echo 'Firebase ID token obtained'
+
+curl -i http://localhost:8080/api/auth/me \
+  -H "Authorization: Bearer ${FIREBASE_ID_TOKEN}"
+
+unset RESPONSE FIREBASE_ID_TOKEN TEST_EMAIL TEST_PASSWORD FIREBASE_WEB_API_KEY
+```
+
+A successful request returns `200` with `{"uid":"..."}`, matching the signed-in test user's Firebase UID. The token comes from **Firebase Authentication**, not the service account impersonation command. The diagnostic endpoint does not perform database lookups or ownership checks.
+
+> Shell compatibility: The commands above use zsh syntax for reading credentials interactively. If you're using bash, replace them with:
+>
+> ```
+> read -r -p 'Test user email: ' TEST_EMAIL
+> read -r -s -p 'Test user password: ' TEST_PASSWORD
+> echo
+> ```
+>
+> Other shells may require different syntax.
+
+### Automated testing
+
+`internal/auth` tests verify bearer parsing and UID propagation with a fake token verifier. `cmd/server/auth_route_test.go` exercises the actual `/api/auth/me` route, checking 401 errors and the UID in the 200 JSON response. These tests do **not** contact Firebase or require ADC, and should run in CI:
+
+```bash
+# Test the authenticated route and its HTTP responses.
+go test ./cmd/server -run '^TestAuthMeRoute$' -v
+
+# Run the complete test suite and static checks.
+go test ./...
+go test -race ./...
+go vet ./...
+```
+
+**Do not use `gcloud auth application-default print-access-token` output in the MapMory `Authorization` header.** That is a Google OAuth access token for Google APIs, not a Firebase user ID token.
+
+## 7. What comes next (backend issue #8)
+
+The remaining work is to resolve verified Firebase UIDs to internal PostgreSQL users once migrations are available, and enforce ownership on trip and photo endpoints. Until then, the in-memory trip endpoints are **not** owner-secured. Ordinary `VerifyIDToken` verification does not check token revocation; revocation-aware behavior should be considered separately if required.
+
+## 8. For the administrator — grant or revoke teammate access
 
 The following **does not happen inside Firebase Authentication**. IAM permissions are managed for the *same underlying Google Cloud project* `mapmory-development`.
 
@@ -153,33 +248,6 @@ gcloud iam service-accounts remove-iam-policy-binding \
 ```
 
 **Important distinction:** If a developer needs to change Firebase Auth settings or view/manage users in Firebase Console, grant a **separate appropriately scoped project role**. Token Creator alone does not do that. Consider appointing a second trusted project administrator before handover; a single administrator is a team dependency.
-
-## 5. Why we use keyless credentials
-
-The old alternative is downloading a **service-account private-key JSON file**. We **do not use that approach**. A private key is long-lived and can be copied or accidentally committed.
-
-Instead, Google Cloud CLI stores a *local impersonation configuration*. Your own Google login allows Google Cloud to issue temporary credentials as the named service account. **No service-account private key is downloaded.** Developers can be removed individually from the IAM policy.
-
-Do not generate, share, commit, or deploy service-account private keys. Never commit ADC files, OAuth access tokens, Firebase ID tokens, or test-user passwords. Deployed Google Cloud services should use their attached runtime identity rather than your local impersonation credentials.
-
-## 6. Troubleshooting
-
-| Symptom | Meaning / fix |
-| --- | --- |
-| ADC login said “Credentials saved,” but token test fails with `iam.serviceAccounts.getAccessToken denied` | You lack Token Creator on the target account, or the browser login used a different Google account. Request/check grant, then retry after IAM propagation. |
-| `NOT_FOUND` for `mapmory-local-dev` | Confirm project and service-account email with administrator. |
-| `gcloud auth application-default set-quota-project` says “not user credentials” | Expected for the impersonated ADC type. **Skip this command**; it is not a required setup step. |
-| Frontend developer cannot open Firebase Console | Normal if no separate Console role has been granted; the frontend can use the shared Web SDK config. |
-| OAuth token test passes, but Firebase middleware test fails | Different tests. Check the Firebase Admin SDK initialization, actual Firebase **ID token**, configured project ID, and whether extra API permissions are required. |
-
-## 7. What comes next (backend issue #8)
-
-1. Initialize the Go Firebase Admin SDK once with `FIREBASE_PROJECT_ID=mapmory-development`.
-2. Add middleware that reads `Authorization: Bearer <Firebase ID token>`, verifies it, and passes the trusted UID to handlers.
-3. Unit-test with a fake token verifier; separately test a genuine ID token obtained through Firebase Email/Password sign-in.
-4. After database migrations, resolve the Firebase UID to an internal user and implement ownership checks in subsequent work.
-
-**Do not use `gcloud auth application-default print-access-token` output in the MapMory `Authorization` header**. That is a Google OAuth access token for Google APIs, not a Firebase user ID token.
 
 ## References
 

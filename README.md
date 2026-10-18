@@ -4,7 +4,7 @@ See [Backend coding conventions](docs/coding-conventions.md) for repository expe
 
 MapMory is a photo-first travel-memory application. Its planned backend manages trips and photos, processes image metadata (including EXIF coordinates and capture times), and supports location-based browsing and sharing.
 
-This repository contains the **Go REST API**. The current implementation is an early prototype: it provides a health check and basic trip creation and retrieval with **in-memory storage**. Photo processing, Firebase authentication, and persistent storage are not implemented yet.
+This repository contains the **Go REST API**. The current implementation is an early prototype: it provides a health check and basic trip creation and retrieval with **in-memory storage**. Photo processing and persistent storage are not implemented yet. Firebase ID-token verification is implemented for a diagnostic endpoint, but trip authorization is not.
 
 - [Frontend repository](https://github.com/TravelMapMory/mapmory-frontend)
 - [OpenAPI contract](openapi/openapi.yaml) — target API behavior; not every operation is implemented
@@ -17,13 +17,14 @@ This repository contains the **Go REST API**. The current implementation is an e
 | Create a trip | Implemented; in-memory |
 | List trips | Implemented; no pagination yet |
 | Get a trip by ID | Implemented; in-memory |
-| Firebase ID token verification and trip ownership | Pending |
+| Firebase ID token verification | Implemented for `GET /api/auth/me` |
+| Database user resolution and trip ownership | Pending |
 | PostgreSQL persistence | Pending |
 | Photo metadata inspection command | Implemented; local files only |
 | Photo registration, uploads, and processing | Pending |
 | Location resolution and sharing | Pending |
 
-**Important:** The OpenAPI specification describes authenticated, owner-scoped operations. The prototype currently has **no authentication or authorization**; all trips in the server's process-wide memory are accessible to callers. Do not deploy it as a production service holding private user data.
+**Important:** The OpenAPI specification describes authenticated, owner-scoped operations. The prototype verifies Firebase ID tokens on **`/api/auth/me` only**. Trip routes do **not** enforce authentication or ownership; all trips in the server's process-wide memory remain accessible to callers. Do not deploy it as a production service holding private user data.
 
 ## Getting started
 
@@ -37,13 +38,16 @@ MapMory uses the shared Firebase project **`mapmory-development`**. Everyone can
 
 For developer onboarding, see [Firebase Authentication — local development](docs/firebase-auth-setup.md): **start with the identity explanation**, then follow the teammate access request and keyless `gcloud` setup. Ki Chun currently administers the Firebase project; other teammates can implement frontend sign-in without Firebase Console access. Backend developers request narrowly scoped impersonation access on `mapmory-local-dev` through Google Cloud IAM.
 
-**Status:** The current API does not yet implement Firebase verification or trip ownership protection. Never treat the existing in-memory trip endpoints as private.
+**Status:** `GET /api/auth/me` verifies real Firebase ID tokens and returns the verified UID. The trip endpoints remain unprotected and do not enforce ownership. Never treat in-memory trips as private.
 
 ### Run locally
 
-From the repository root:
+From the repository root, complete the [keyless ADC setup](docs/firebase-auth-setup.md) first, then configure the Firebase project:
 
 ```bash
+export FIREBASE_PROJECT_ID=mapmory-development
+unset GOOGLE_APPLICATION_CREDENTIALS
+unset FIREBASE_AUTH_EMULATOR_HOST
 go run ./cmd/server
 ```
 
@@ -83,6 +87,21 @@ List all trips:
 curl -i http://localhost:8080/api/trips
 ```
 
+Check the protected authentication endpoint (without a Firebase ID token it returns `401`):
+
+```bash
+curl -i http://localhost:8080/api/auth/me
+```
+
+With a genuine Firebase **user ID token** from the `mapmory-development` Email/Password sign-in flow:
+
+```bash
+curl -i http://localhost:8080/api/auth/me \
+  -H "Authorization: Bearer $FIREBASE_ID_TOKEN"
+```
+
+A valid token returns `200` with `{"uid":"<verified Firebase UID>"}`. See the [Firebase setup guide](docs/firebase-auth-setup.md#7-test-with-a-real-firebase-user-id-token) for a safe, reproducible real-token test. Never substitute the Google OAuth token from `gcloud auth application-default print-access-token` here.
+
 More examples, including invalid inputs and missing trips, are in [`requests.http`](requests.http).
 
 ## Implemented endpoints
@@ -90,6 +109,7 @@ More examples, including invalid inputs and missing trips, are in [`requests.htt
 | Method | Path | Success | Notes |
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | `200` | Returns `{"status":"ok"}` |
+| `GET` | `/api/auth/me` | `200` | Requires a verified Firebase ID token; returns `{"uid":"..."}`. Missing/invalid token → `401` |
 | `GET` | `/api/trips` | `200` | Returns `{ "items": [...], "next_cursor": null }`; pagination not yet implemented |
 | `POST` | `/api/trips` | `201` | Creates a trip from `title` and optional `notes` |
 | `GET` | `/api/trips/{trip_id}` | `200` | Returns a trip; missing or malformed IDs return `404` |
@@ -107,13 +127,15 @@ Missing trips return JSON rather than a plain-text router error:
 }
 ```
 
-The contract also specifies `401` for missing or invalid Firebase tokens and `404` for trips owned by another user; **those access-control behaviors are not implemented in this prototype**.
+The authentication diagnostic route implements `401` for missing or invalid Firebase tokens. **Trip routes do not yet implement** the contract’s `401` authentication or owner-scoped `404` behavior.
 
 ## Code structure
 
 | Path | Responsibility |
 | --- | --- |
-| `cmd/server/main.go` | HTTP server, routes, request handlers |
+| `cmd/server/main.go` | HTTP server, routes, request handlers, protected diagnostic endpoint |
+| `cmd/server/auth_route_test.go` | Route-level authentication tests with an injected fake verifier |
+| `internal/auth/` | Firebase Admin SDK initialization, bearer middleware, verified identity in request context, unit tests |
 | `cmd/server/api_types.go` | JSON request and response types |
 | `cmd/server/trip_store.go` | Thread-safe in-memory trip storage |
 | `cmd/server/*_test.go` | Handler, storage, and API model tests |
@@ -143,7 +165,7 @@ go build ./...
 
 `gofmt -l .` lists files that are not formatted and must print nothing; run `gofmt -w .` to fix them.
 
-CI runs a gofmt check, vet, build, tests, and a Docker image build. These checks do not establish production readiness or test Firebase, PostgreSQL, or Google Cloud Storage integration.
+CI runs a gofmt check, vet, build, tests, and a Docker image build. These checks do not establish production readiness or test live Firebase, PostgreSQL, or Google Cloud Storage integration. Auth middleware and route tests use a fake verifier and run without Firebase credentials; a real-token smoke test is documented separately.
 
 ## Photo metadata inspection
 
@@ -262,4 +284,4 @@ The image uses a distroless runtime and runs as a nonroot user. It has no shell 
 
 The agreed target architecture uses a Go REST API, PostgreSQL for metadata, Google Cloud Storage with signed upload URLs for photos, Firebase Auth for identity, and Google Cloud deployment. These are **design decisions, not claims of current implementation**.
 
-Next integration milestones include Firebase token verification and ownership checks, database migrations and persistence, photo upload registration/completion, asynchronous metadata processing, and retrieval of photo status. See the [OpenAPI contract](openapi/openapi.yaml) for the proposed request and response shapes; it remains a review draft and may evolve with frontend integration.
+Next integration milestones include database user resolution and trip ownership checks, database migrations and persistence, photo upload registration/completion, asynchronous metadata processing, and retrieval of photo status. See the [OpenAPI contract](openapi/openapi.yaml) for the proposed request and response shapes; it remains a review draft and may evolve with frontend integration.
