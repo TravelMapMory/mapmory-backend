@@ -117,6 +117,10 @@ The contract also specifies `401` for missing or invalid Firebase tokens and `40
 
 The HTTP handlers use Go's standard `net/http` router and structured JSON errors. The in-memory trip store is synchronized, but does not persist or enforce ownership.
 
+### Database migrations
+
+Database schema changes use PostgreSQL 17 and Goose v3.29.0. See [Database migrations](docs/database-migrations.md) for local setup, migration commands, and testing.
+
 ## Tests and checks
 
 Run the automated tests:
