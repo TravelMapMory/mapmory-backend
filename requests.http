@@ -1,12 +1,44 @@
+# Manual API requests for the VS Code REST Client extension.
+# Run the Go server first (see README.md).
+# Authentication examples use a real Firebase *user ID token*, not the
+# Google OAuth token returned by `gcloud auth application-default`.
+#
+# To run the authenticated example, obtain a Firebase ID token as described in
+# docs/firebase-auth-testing.md, then put this line in a local, ignored `.env`:
+#   FIREBASE_ID_TOKEN=<your short-lived Firebase ID token>
+#
+# The REST Client's {{$dotenv FIREBASE_ID_TOKEN}} variable reads it from `.env`.
+# Never commit `.env` or paste tokens into this tracked file.
+
 @baseUrl = http://localhost:8080
 
-### Health check
+### Health check — public (200)
 GET {{baseUrl}}/healthz
 
-### List trips
+### Authentication — missing bearer token (401)
+GET {{baseUrl}}/api/auth/me
+
+### Authentication — invalid bearer token (401)
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer invalid-token
+
+### Authentication — wrong scheme (401)
+GET {{baseUrl}}/api/auth/me
+Authorization: Basic invalid-token
+
+### Authentication — valid Firebase user ID token (200)
+# Requires FIREBASE_ID_TOKEN in the locally ignored .env file.
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+
+# WARNING: Trip endpoints are currently UNPROTECTED and use process-wide,
+# in-memory data. A successful auth/me call does not make trips owner-secured.
+
+### List trips — currently public (200)
 GET {{baseUrl}}/api/trips
 
-### Create trip
+### Create trip — currently public (201)
+# @name createTrip
 POST {{baseUrl}}/api/trips
 Content-Type: application/json
 
@@ -15,7 +47,11 @@ Content-Type: application/json
   "notes": "Summer trip"
 }
 
-### Invalid: blank title
+### Get the trip created above (200)
+# Run "Create trip" first; the server must not have restarted.
+GET {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}
+
+### Invalid trip — blank title (400)
 POST {{baseUrl}}/api/trips
 Content-Type: application/json
 
@@ -23,7 +59,7 @@ Content-Type: application/json
   "title": "   "
 }
 
-### Invalid: unknown field
+### Invalid trip — unknown field (400)
 POST {{baseUrl}}/api/trips
 Content-Type: application/json
 
@@ -31,8 +67,6 @@ Content-Type: application/json
   "title": "Japan",
   "titel": "typo"
 }
-### Get one trip (replace with the ID returned from Create trip)
-GET {{baseUrl}}/api/trips/{{tripId}}
 
-### Missing trip: contract-shaped JSON 404
+### Missing trip — JSON 404
 GET {{baseUrl}}/api/trips/00000000-0000-4000-8000-000000000000

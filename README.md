@@ -36,7 +36,7 @@ This repository contains the **Go REST API**. The current implementation is an e
 
 MapMory uses the shared Firebase project **`mapmory-development`**. Everyone can run their own frontend and backend locally. The frontend signs application users in through Firebase and sends a **Firebase ID token** to the API. Google Cloud **ADC service-account impersonation** is a separate way for a local backend to authenticate to Google APIs; its OAuth token is **not** a MapMory user token.
 
-For developer onboarding, see [Firebase Authentication — local development](docs/firebase-auth-setup.md): **start with the identity explanation**, then follow the teammate access request and keyless `gcloud` setup. Ki Chun currently administers the Firebase project; other teammates can implement frontend sign-in without Firebase Console access. Backend developers request narrowly scoped impersonation access on `mapmory-local-dev` through Google Cloud IAM.
+For developer onboarding, see [Firebase Authentication — local development](docs/firebase-auth-setup.md); for sign-in and token tests, see [Firebase Authentication — testing](docs/firebase-auth-testing.md). In the setup guide, **start with the identity explanation**, then follow the teammate access request and keyless `gcloud` setup. Ki Chun currently administers the Firebase project; other teammates can implement frontend sign-in without Firebase Console access. Backend developers request narrowly scoped impersonation access on `mapmory-local-dev` through Google Cloud IAM.
 
 **Status:** `GET /api/auth/me` verifies real Firebase ID tokens and returns the verified UID. The trip endpoints remain unprotected and do not enforce ownership. Never treat in-memory trips as private.
 
@@ -100,9 +100,9 @@ curl -i http://localhost:8080/api/auth/me \
   -H "Authorization: Bearer $FIREBASE_ID_TOKEN"
 ```
 
-A valid token returns `200` with `{"uid":"<verified Firebase UID>"}`. See the [Firebase setup guide](docs/firebase-auth-setup.md#7-test-with-a-real-firebase-user-id-token) for a safe, reproducible real-token test. Never substitute the Google OAuth token from `gcloud auth application-default print-access-token` here.
+A valid token returns `200` with `{"uid":"<verified Firebase UID>"}`. See the [Firebase testing guide](docs/firebase-auth-testing.md) for a safe, reproducible real-token test. Never substitute the Google OAuth token from `gcloud auth application-default print-access-token` here.
 
-More examples, including invalid inputs and missing trips, are in [`requests.http`](requests.http).
+More examples, including authenticated and rejected requests, trip creation, and invalid inputs, are in [`requests.http`](requests.http). The file supports VS Code's REST Client extension. Follow the [real-token walkthrough](docs/firebase-auth-testing.md) to obtain a Firebase ID token and write it into a local, Git-ignored `.env` file **before clearing the shell variable**. `.env.example` documents `FIREBASE_WEB_API_KEY`, disposable test-user credentials, and the temporary `FIREBASE_ID_TOKEN` used by REST Client. Keep these values in a local, ignored `.env` file, and follow the testing guide to add the token **without overwriting other entries**. Only use disposable test-account passwords, never real credentials. The Go server does not load `.env` automatically; the testing guide reads the Web API key and disposable test credentials explicitly. Remove the ID token from `.env` after testing; never commit real ID tokens.
 
 ## Implemented endpoints
 
@@ -260,23 +260,9 @@ Build the container image:
 docker build -t mapmory-backend .
 ```
 
-Run it:
+The server now initializes Firebase at startup and requires `FIREBASE_PROJECT_ID`. **Building the image does not provide runtime credentials.** To run it, configure an appropriate Google Cloud runtime identity (for example, an attached service account on Google Cloud) and set `FIREBASE_PROJECT_ID=mapmory-development` in the deployment environment. Simply running `docker run -p 8080:8080 mapmory-backend` without this configuration is no longer a supported smoke test.
 
-```bash
-docker run --rm -p 8080:8080 mapmory-backend
-```
-
-Check its health endpoint:
-
-```bash
-curl -i http://localhost:8080/healthz
-```
-
-To change the listening port:
-
-```bash
-docker run --rm -e PORT=9090 -p 9090:9090 mapmory-backend
-```
+For local HTTP smoke tests, use `go run ./cmd/server` with the keyless ADC setup above. Local Docker credential forwarding is not documented here; do not bake ADC files or private keys into images.
 
 The image uses a distroless runtime and runs as a nonroot user. It has no shell or package manager. Container restarts also discard the current in-memory trips.
 
