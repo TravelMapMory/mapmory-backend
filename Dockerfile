@@ -1,5 +1,5 @@
 # Build stage: compiles the server into a single statically linked binary.
-FROM golang:1.26.1-bookworm AS build
+FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
 
