@@ -1,6 +1,6 @@
 // Package photometa reads the few EXIF fields MapMory cares about (GPS
-// coordinates and the original capture time) from JPEG and PNG files using
-// only the standard library.
+// coordinates, the original capture time and the image orientation) from JPEG
+// and PNG files using only the standard library.
 //
 // It is deliberately not an image validator: once the EXIF block is found and
 // read, parsing stops, and callers that need a decodable image must decode it
@@ -23,10 +23,18 @@ type Metadata struct {
 	HasEXIF bool
 	// GPS is nil unless both coordinates are present and valid.
 	GPS *GPS
+	// GPSMalformed reports that GPS coordinate tags or the GPS IFD pointer are
+	// present but unusable: out of range, a zero denominator, a bad hemisphere
+	// letter or an unreadable directory. GPS is then nil. It is false when the
+	// file simply carries no GPS position.
+	GPSMalformed bool
 	// DateTimeOriginal is EXIF tag 0x9003 exactly as stored; empty means missing.
 	DateTimeOriginal string
 	// OffsetTimeOriginal is EXIF tag 0x9011 exactly as stored; empty means missing.
 	OffsetTimeOriginal string
+	// Orientation is EXIF tag 0x0112 from IFD0 exactly as stored, normally 1-8;
+	// 0 means missing or not a single SHORT value.
+	Orientation int
 }
 
 // GPS is a position in signed WGS84 decimal degrees: north and east are
@@ -43,6 +51,7 @@ type GPS struct {
 const (
 	tagExifIFD            = 0x8769
 	tagGPSIFD             = 0x8825
+	tagOrientation        = 0x0112
 	tagDateTimeOriginal   = 0x9003
 	tagOffsetTimeOriginal = 0x9011
 	tagGPSLatRef          = 0x0001
@@ -54,13 +63,20 @@ const (
 // TIFF value types read by this package.
 const (
 	typeASCII    = 2
+	typeShort    = 3
 	typeLong     = 4
 	typeRational = 5
 	typeIFD      = 13
 )
 
+// ErrUnsupportedFormat is returned by Parse for data that is neither JPEG nor
+// PNG.
+var ErrUnsupportedFormat = errors.New("not a JPEG or PNG file")
+
 var (
-	jpegMagic  = []byte{0xFF, 0xD8, 0xFF}
+	// jpegMagic is the signature image/jpeg registers, so any file the standard
+	// decoder takes for a JPEG is a JPEG here too.
+	jpegMagic  = []byte{0xFF, 0xD8}
 	pngMagic   = []byte("\x89PNG\r\n\x1a\n")
 	exifHeader = []byte("Exif\x00\x00")
 )
@@ -70,8 +86,10 @@ var (
 //
 // It returns an error only when the container or the EXIF header and top-level
 // directory are malformed. A damaged GPS or Exif sub-directory, or a bad tag
-// value, just leaves that field missing, so one corrupt value never hides the
-// others. A file without EXIF is not an error; HasEXIF is false.
+// value, just leaves that field missing (and sets GPSMalformed for a damaged
+// GPS position), so one corrupt value never hides the others. A file without
+// EXIF is not an error; HasEXIF is false. Data that is neither JPEG nor PNG
+// returns ErrUnsupportedFormat.
 func Parse(data []byte) (Metadata, error) {
 	var (
 		m     Metadata
@@ -88,7 +106,7 @@ func Parse(data []byte) (Metadata, error) {
 		m.Format = "png"
 		block, found, err = pngEXIF(data)
 	default:
-		return Metadata{}, errors.New("not a JPEG or PNG file")
+		return Metadata{}, ErrUnsupportedFormat
 	}
 	if err != nil {
 		return Metadata{}, err
@@ -213,14 +231,33 @@ func parseTIFF(block []byte, m *Metadata) error {
 		m.OffsetTimeOriginal = r.ascii(exif[tagOffsetTimeOriginal])
 	}
 
-	if gps, ok := r.subIFD(ifd0, tagGPSIFD); ok {
+	m.Orientation = r.short(ifd0[tagOrientation])
+
+	if _, hasGPS := ifd0[tagGPSIFD]; hasGPS {
+		// A nil map from an unreadable GPS IFD is safe to index below.
+		gps, _ := r.subIFD(ifd0, tagGPSIFD)
 		lat, latOK := r.coordinate(gps, tagGPSLatRef, tagGPSLat, 'N', 'S', 90)
 		lng, lngOK := r.coordinate(gps, tagGPSLngRef, tagGPSLng, 'E', 'W', 180)
-		if latOK && lngOK {
+		switch {
+		case latOK && lngOK:
 			m.GPS = &GPS{Lat: lat, Lng: lng}
+		case gps == nil || hasCoordinateTag(gps):
+			m.GPSMalformed = true
 		}
 	}
 	return nil
+}
+
+// hasCoordinateTag reports whether the GPS directory carries any latitude or
+// longitude tag. A directory with only other tags, such as GPSVersionID, counts
+// as "no position", not as a damaged one.
+func hasCoordinateTag(gps map[uint16]entry) bool {
+	for _, tag := range []uint16{tagGPSLatRef, tagGPSLat, tagGPSLngRef, tagGPSLng} {
+		if _, ok := gps[tag]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // ifd reads the entry table of the directory at off. It reports false when the
@@ -290,6 +327,16 @@ func (r reader) ascii(e entry) string {
 		b = b[:i]
 	}
 	return string(b)
+}
+
+// short returns the value of a single-element SHORT entry, or 0 for a missing
+// entry, a wrong type or a count other than 1. The 2-byte value sits at the
+// start of the 4-byte field in both byte orders.
+func (r reader) short(e entry) int {
+	if e.typ != typeShort || e.count != 1 {
+		return 0
+	}
+	return int(r.order.Uint16(e.raw))
 }
 
 // degrees converts a GPS RATIONAL triple (degrees, minutes, seconds) into
