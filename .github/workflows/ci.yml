@@ -82,3 +82,21 @@ jobs:
           else
             echo "::notice::main has moved past $GITHUB_SHA; leaving :main as it is"
           fi
+  database-migrations:
+    name: Database migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: Install Goose v3.29.0
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@v3.29.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Test migration lifecycle
+        run: ./scripts/test-migrations.sh
