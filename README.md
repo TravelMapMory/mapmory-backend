@@ -22,7 +22,8 @@ This repository contains the **Go REST API**. The current implementation is an e
 | PostgreSQL persistence | Pending |
 | Photo metadata inspection command | Implemented; local files only |
 | Photo registration, uploads, and processing | Pending |
-| Location resolution and sharing | Pending |
+| Place resolution (Geoapify reverse geocoding) | Implemented as a library; not wired into the API |
+| Location correction and sharing | Pending |
 
 **Important:** The OpenAPI specification describes authenticated, owner-scoped operations. The prototype verifies Firebase ID tokens on **`/api/auth/me` only**. Trip routes do **not** enforce authentication or ownership; all trips in the server's process-wide memory remain accessible to callers. Do not deploy it as a production service holding private user data.
 
@@ -142,6 +143,9 @@ The authentication diagnostic route implements `401` for missing or invalid Fire
 | `cmd/photometa/main.go` | Photo metadata inspection command |
 | `internal/photometa/photometa.go` | JPEG and PNG EXIF reader used by the command |
 | `internal/photometa/testdata/` | Synthetic test images and the generator that writes them |
+| `internal/place/place.go` | Provider-independent place resolver, result type and errors |
+| `internal/place/geoapify/geoapify.go` | Geoapify reverse-geocoding adapter |
+| `docs/place-resolution.md` | Configuration, attribution and provider-extension notes |
 | `openapi/openapi.yaml` | Proposed API specification |
 | `requests.http` | Manual API requests |
 
