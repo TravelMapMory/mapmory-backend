@@ -45,6 +45,23 @@ TEST_PASSWORD=your-disposable-test-user-password
 
 ## 3. Sign in and obtain a Firebase ID token
 
+### Shortcut: `scripts/firebase-id-token.sh`
+
+Once the `.env` from section 2 exists, one command signs in and saves a fresh token as `FIREBASE_ID_TOKEN` in it. This is the same flow as the manual steps below, so `requests.http` (section 4) and `curl` work again after the roughly one-hour expiry:
+
+```bash
+scripts/firebase-id-token.sh                                 # sign in, update FIREBASE_ID_TOKEN in .env
+scripts/firebase-id-token.sh --check http://localhost:8080   # ...then call GET /api/auth/me (200)
+scripts/firebase-id-token.sh --check https://mapmory.app     # ...against a deployed backend
+export FIREBASE_ID_TOKEN=$(scripts/firebase-id-token.sh --print)   # also hand the token to this shell
+```
+
+The script needs `curl` and `jq`. It reads `FIREBASE_WEB_API_KEY`, `TEST_EMAIL` and `TEST_PASSWORD` from `.env` without sourcing it, and it never creates `.env`: if the file or a variable is missing it stops and says what to add. Only the `FIREBASE_ID_TOKEN` line is replaced (or appended); every other line and the file's permissions are kept. It never prints the password or the API key, and prints the token only if you pass `--print` (then only the token goes to stdout and all messages to stderr). On failure it shows Firebase's error message, for example `INVALID_LOGIN_CREDENTIALS`. With `--check`, it exits non-zero unless `/api/auth/me` returns 200.
+
+To sign in against the Firebase Auth emulator instead of the real project, set `FIREBASE_AUTH_EMULATOR_HOST` (for example `127.0.0.1:9099`) first. The script prints which endpoint it uses; `unset FIREBASE_AUTH_EMULATOR_HOST` to go back to the real project.
+
+### Manual steps
+
 The commands below use `jq`, `curl`, and POSIX-compatible shell syntax. Read the values from `.env` without sourcing the file as executable shell code. They assume each variable appears once as a simple `KEY=value` line and that the test password does not contain newline characters.
 
 ```bash
@@ -73,7 +90,7 @@ The response should be HTTP **200** with `{"uid":"..."}`, matching the user's Fi
 
 The REST Client's authenticated request uses `{{$dotenv FIREBASE_ID_TOKEN}}` from the repository-root `.env`. It does not read your terminal's `FIREBASE_ID_TOKEN` automatically.
 
-**Before writing the token:** check whether `.env` exists and preserve every existing entry. Since it already contains the Web API key and test credentials, edit the file and add or replace only the line below, using the token held in your shell:
+The shortcut in section 3 writes this entry for you. To do it by hand instead, **before writing the token** check whether `.env` exists and preserve every existing entry. Since it already contains the Web API key and test credentials, edit the file and add or replace only the line below, using the token held in your shell:
 
 ```dotenv
 FIREBASE_ID_TOKEN=your-newly-obtained-firebase-id-token
