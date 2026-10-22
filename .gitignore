@@ -13,8 +13,15 @@
 *.out
 coverage.txt
 
-# Local environment
+# Local environment overrides
 .env
+.env.*
+!.env.example
+
+# Local authentication credentials
+/credentials/
+**/service-account*.json
+**/*firebase-admin*.json
 
 # macOS
 .DS_Store
