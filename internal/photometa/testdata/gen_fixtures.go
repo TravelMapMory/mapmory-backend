@@ -1,8 +1,9 @@
 //go:build ignore
 
 // gen_fixtures writes the synthetic test images used by the photometa tests
-// into internal/photometa/testdata. Every file is a tiny 8x8 grey image with a
-// hand-built EXIF block, so no real photo (and no real location) is committed.
+// into internal/photometa/testdata. Every file is a tiny grey image (8x8, or
+// 64x32 for the orientation fixtures) with a hand-built EXIF block, so no real
+// photo (and no real location) is committed.
 //
 // Run it from the repository root:
 //
@@ -18,6 +19,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"image/png"
 	"log"
@@ -31,6 +33,7 @@ const outDir = "internal/photometa/testdata"
 // TIFF value types used by the fixtures.
 const (
 	typeASCII    = 2
+	typeShort    = 3
 	typeLong     = 4
 	typeRational = 5
 )
@@ -46,6 +49,11 @@ type entry struct {
 // asciiEntry returns an ASCII entry holding s plus the terminating NUL.
 func asciiEntry(tag uint16, s string) entry {
 	return entry{tag: tag, typ: typeASCII, count: uint32(len(s) + 1), val: []byte(s + "\x00")}
+}
+
+// shortEntry returns a single-value SHORT entry, such as the orientation tag.
+func shortEntry(bo binary.AppendByteOrder, tag, v uint16) entry {
+	return entry{tag: tag, typ: typeShort, count: 1, val: bo.AppendUint16(nil, v)}
 }
 
 // longEntry returns a single-value LONG entry.
@@ -113,9 +121,11 @@ func encodeIFD(bo binary.AppendByteOrder, base uint32, entries []entry) []byte {
 	return append(table, extra...)
 }
 
-// buildTIFF assembles a TIFF block: header, IFD0 holding only the pointers to
-// the sub-directories that have entries, then the Exif IFD, then the GPS IFD.
-func buildTIFF(bo binary.AppendByteOrder, exif, gps []entry) []byte {
+// buildTIFF assembles a TIFF block: header, IFD0 holding the ifd0 entries plus
+// pointers to the sub-directories that have entries, then the Exif IFD, then
+// the GPS IFD. Every ifd0 value must fit in the 4-byte value field, because
+// IFD0 has no room for out-of-line data.
+func buildTIFF(bo binary.AppendByteOrder, ifd0, exif, gps []entry) []byte {
 	pointers := 0
 	if exif != nil {
 		pointers++
@@ -131,7 +141,7 @@ func buildTIFF(bo binary.AppendByteOrder, exif, gps []entry) []byte {
 	block := bo.AppendUint16([]byte(mark), 42)
 	block = bo.AppendUint32(block, 8)
 
-	ifd0Len := uint32(2 + 12*pointers + 4)
+	ifd0Len := uint32(2 + 12*(len(ifd0)+pointers) + 4)
 	exifOff := 8 + ifd0Len
 	var exifIFD []byte
 	if exif != nil {
@@ -139,7 +149,6 @@ func buildTIFF(bo binary.AppendByteOrder, exif, gps []entry) []byte {
 	}
 	gpsOff := exifOff + uint32(len(exifIFD))
 
-	var ifd0 []entry
 	if exif != nil {
 		ifd0 = append(ifd0, longEntry(bo, 0x8769, exifOff))
 	}
@@ -187,10 +196,26 @@ func baseImage() image.Image {
 	return img
 }
 
-// encodeJPEG returns baseImage as a plain JPEG with no EXIF.
-func encodeJPEG() []byte {
+// quadrantImage is a 64x32 white image whose top-left 32x16 quadrant is black,
+// so a decoder can tell which way an orientation tag turned it. The quadrant
+// edges fall on 8-pixel JPEG block boundaries, which keeps them sharp.
+func quadrantImage() image.Image {
+	img := image.NewGray(image.Rect(0, 0, 64, 32))
+	for i := range img.Pix {
+		img.Pix[i] = 0xFF
+	}
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 32; x++ {
+			img.SetGray(x, y, color.Gray{})
+		}
+	}
+	return img
+}
+
+// encodeJPEG returns img as a plain JPEG with no EXIF.
+func encodeJPEG(img image.Image) []byte {
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, baseImage(), &jpeg.Options{Quality: 75}); err != nil {
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 75}); err != nil {
 		log.Fatal(err)
 	}
 	return buf.Bytes()
@@ -210,7 +235,7 @@ func encodePNG() []byte {
 // denominator of the latitude seconds (10 is valid, 0 makes the position unusable).
 func fullTIFF(bo binary.AppendByteOrder, latSecDen uint32) []byte {
 	gps := gpsEntries(bo, "N", []uint32{60, 1, 11, 1, 126, latSecDen}, "E", []uint32{24, 1, 49, 1, 4008, 100})
-	return buildTIFF(bo, exifEntries("2025:07:14 09:30:00", "+03:00"), gps)
+	return buildTIFF(bo, nil, exifEntries("2025:07:14 09:30:00", "+03:00"), gps)
 }
 
 // main writes all fixtures. Seconds values are multiples of 0.006" (0.0001') so macOS
@@ -220,7 +245,8 @@ func main() {
 		log.Fatalf("run this from the repository root: %v", err)
 	}
 
-	jpg, img := encodeJPEG(), encodePNG()
+	jpg, img := encodeJPEG(baseImage()), encodePNG()
+	quadrant := encodeJPEG(quadrantImage())
 	be, le := binary.BigEndian, binary.LittleEndian
 
 	badPointer := fullTIFF(le, 10)
@@ -230,14 +256,24 @@ func main() {
 	// 22 deg 57' 6" S, 43 deg 12' 37.8" W, and no Exif IFD.
 	southWest := gpsEntries(le, "S", []uint32{22, 1, 57, 1, 6, 1}, "W", []uint32{43, 1, 12, 1, 378, 10})
 
+	outOfRange := gpsEntries(be, "N", []uint32{95, 1, 0, 1, 0, 1}, "E", []uint32{24, 1, 49, 1, 4008, 100})
+	withOrientation := func(bo binary.AppendByteOrder, o uint16) []byte {
+		return withAPP1(quadrant, buildTIFF(bo, []entry{shortEntry(bo, 0x0112, o)}, nil, nil))
+	}
+
 	fixtures := map[string][]byte{
-		"gps.jpg":            withAPP1(jpg, fullTIFF(be, 10)),
-		"gps.png":            withEXIf(img, buildTIFF(le, nil, southWest)),
-		"no_gps.jpg":         withAPP1(jpg, buildTIFF(le, exifEntries("2025:07:15 18:05:42", ""), nil)),
-		"no_exif.jpg":        jpg,
-		"no_exif.png":        img,
-		"zero_den.jpg":       withAPP1(jpg, fullTIFF(le, 0)),
-		"bad_gps_offset.jpg": withAPP1(jpg, badPointer),
+		"gps.jpg":              withAPP1(jpg, fullTIFF(be, 10)),
+		"gps.png":              withEXIf(img, buildTIFF(le, nil, nil, southWest)),
+		"no_gps.jpg":           withAPP1(jpg, buildTIFF(le, nil, exifEntries("2025:07:15 18:05:42", ""), nil)),
+		"no_exif.jpg":          jpg,
+		"no_exif.png":          img,
+		"zero_den.jpg":         withAPP1(jpg, fullTIFF(le, 0)),
+		"bad_gps_offset.jpg":   withAPP1(jpg, badPointer),
+		"gps_out_of_range.jpg": withAPP1(jpg, buildTIFF(be, nil, exifEntries("2025:07:14 09:30:00", "+03:00"), outOfRange)),
+		"bad_time.jpg":         withAPP1(jpg, buildTIFF(le, nil, exifEntries("2025:13:45 99:00:00", "+25:00"), nil)),
+		"orientation_3.jpg":    withOrientation(le, 3),
+		"orientation_6.jpg":    withOrientation(be, 6),
+		"orientation_8.jpg":    withOrientation(le, 8),
 	}
 	for name, data := range fixtures {
 		if err := os.WriteFile(filepath.Join(outDir, name), data, 0o644); err != nil {
