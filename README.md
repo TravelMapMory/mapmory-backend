@@ -4,7 +4,7 @@ See [Backend coding conventions](docs/coding-conventions.md) for repository expe
 
 MapMory is a photo-first travel-memory application. Its planned backend manages trips and photos, processes image metadata (including EXIF coordinates and capture times), and supports location-based browsing and sharing.
 
-This repository contains the **Go REST API**. The current implementation is an early prototype: it provides a health check and basic trip creation and retrieval with **in-memory storage**. Photo processing, Firebase authentication, and persistent storage are not implemented yet.
+This repository contains the **Go REST API**. The current implementation is an early prototype: it provides a health check and basic trip creation and retrieval with **in-memory storage**. Photo processing and persistent storage are not implemented yet. Firebase ID-token verification is implemented for a diagnostic endpoint, but trip authorization is not.
 
 - [Frontend repository](https://github.com/TravelMapMory/mapmory-frontend)
 - [OpenAPI contract](openapi/openapi.yaml) — target API behavior; not every operation is implemented
@@ -17,14 +17,15 @@ This repository contains the **Go REST API**. The current implementation is an e
 | Create a trip | Implemented; in-memory |
 | List trips | Implemented; no pagination yet |
 | Get a trip by ID | Implemented; in-memory |
-| Firebase ID token verification and trip ownership | Pending |
+| Firebase ID token verification | Implemented for `GET /api/auth/me` |
+| Database user resolution and trip ownership | Pending |
 | PostgreSQL persistence | Pending |
 | Photo metadata inspection command | Implemented; local files only |
 | Photo registration, uploads, and processing | Pending |
 | Place resolution (Geoapify reverse geocoding) | Implemented as a library; not wired into the API |
 | Location correction and sharing | Pending |
 
-**Important:** The OpenAPI specification describes authenticated, owner-scoped operations. The prototype currently has **no authentication or authorization**; all trips in the server's process-wide memory are accessible to callers. Do not deploy it as a production service holding private user data.
+**Important:** The OpenAPI specification describes authenticated, owner-scoped operations. The prototype verifies Firebase ID tokens on **`/api/auth/me` only**. Trip routes do **not** enforce authentication or ownership; all trips in the server's process-wide memory remain accessible to callers. Do not deploy it as a production service holding private user data.
 
 ## Getting started
 
@@ -32,11 +33,22 @@ This repository contains the **Go REST API**. The current implementation is an e
 
 - Go 1.26.1 or newer (as declared in `go.mod`)
 
+### Firebase Authentication (development configuration)
+
+MapMory uses the shared Firebase project **`mapmory-development`**. Everyone can run their own frontend and backend locally. The frontend signs application users in through Firebase and sends a **Firebase ID token** to the API. Google Cloud **ADC service-account impersonation** is a separate way for a local backend to authenticate to Google APIs; its OAuth token is **not** a MapMory user token.
+
+For developer onboarding, see [Firebase Authentication — local development](docs/firebase-auth-setup.md); for sign-in and token tests, see [Firebase Authentication — testing](docs/firebase-auth-testing.md). In the setup guide, **start with the identity explanation**, then follow the teammate access request and keyless `gcloud` setup. Ki Chun currently administers the Firebase project; other teammates can implement frontend sign-in without Firebase Console access. Backend developers request narrowly scoped impersonation access on `mapmory-local-dev` through Google Cloud IAM.
+
+**Status:** `GET /api/auth/me` verifies real Firebase ID tokens and returns the verified UID. The trip endpoints remain unprotected and do not enforce ownership. Never treat in-memory trips as private.
+
 ### Run locally
 
-From the repository root:
+From the repository root, complete the [keyless ADC setup](docs/firebase-auth-setup.md) first, then configure the Firebase project:
 
 ```bash
+export FIREBASE_PROJECT_ID=mapmory-development
+unset GOOGLE_APPLICATION_CREDENTIALS
+unset FIREBASE_AUTH_EMULATOR_HOST
 go run ./cmd/server
 ```
 
@@ -76,13 +88,29 @@ List all trips:
 curl -i http://localhost:8080/api/trips
 ```
 
-More examples, including invalid inputs and missing trips, are in [`requests.http`](requests.http).
+Check the protected authentication endpoint (without a Firebase ID token it returns `401`):
+
+```bash
+curl -i http://localhost:8080/api/auth/me
+```
+
+With a genuine Firebase **user ID token** from the `mapmory-development` Email/Password sign-in flow:
+
+```bash
+curl -i http://localhost:8080/api/auth/me \
+  -H "Authorization: Bearer $FIREBASE_ID_TOKEN"
+```
+
+A valid token returns `200` with `{"uid":"<verified Firebase UID>"}`. See the [Firebase testing guide](docs/firebase-auth-testing.md) for a safe, reproducible real-token test. Never substitute the Google OAuth token from `gcloud auth application-default print-access-token` here.
+
+More examples, including authenticated and rejected requests, trip creation, and invalid inputs, are in [`requests.http`](requests.http). The file supports VS Code's REST Client extension. Follow the [real-token walkthrough](docs/firebase-auth-testing.md) to obtain a Firebase ID token and write it into a local, Git-ignored `.env` file **before clearing the shell variable**. `.env.example` documents `FIREBASE_WEB_API_KEY`, disposable test-user credentials, and the temporary `FIREBASE_ID_TOKEN` used by REST Client. Keep these values in a local, ignored `.env` file, and follow the testing guide to add the token **without overwriting other entries**. Only use disposable test-account passwords, never real credentials. The Go server does not load `.env` automatically; the testing guide reads the Web API key and disposable test credentials explicitly. Remove the ID token from `.env` after testing; never commit real ID tokens.
 
 ## Implemented endpoints
 
 | Method | Path | Success | Notes |
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | `200` | Returns `{"status":"ok"}` |
+| `GET` | `/api/auth/me` | `200` | Requires a verified Firebase ID token; returns `{"uid":"..."}`. Missing/invalid token → `401` |
 | `GET` | `/api/trips` | `200` | Returns `{ "items": [...], "next_cursor": null }`; pagination not yet implemented |
 | `POST` | `/api/trips` | `201` | Creates a trip from `title` and optional `notes` |
 | `GET` | `/api/trips/{trip_id}` | `200` | Returns a trip; missing or malformed IDs return `404` |
@@ -100,13 +128,15 @@ Missing trips return JSON rather than a plain-text router error:
 }
 ```
 
-The contract also specifies `401` for missing or invalid Firebase tokens and `404` for trips owned by another user; **those access-control behaviors are not implemented in this prototype**.
+The authentication diagnostic route implements `401` for missing or invalid Firebase tokens. **Trip routes do not yet implement** the contract’s `401` authentication or owner-scoped `404` behavior.
 
 ## Code structure
 
 | Path | Responsibility |
 | --- | --- |
-| `cmd/server/main.go` | HTTP server, routes, request handlers |
+| `cmd/server/main.go` | HTTP server, routes, request handlers, protected diagnostic endpoint |
+| `cmd/server/auth_route_test.go` | Route-level authentication tests with an injected fake verifier |
+| `internal/auth/` | Firebase Admin SDK initialization, bearer middleware, verified identity in request context, unit tests |
 | `cmd/server/api_types.go` | JSON request and response types |
 | `cmd/server/trip_store.go` | Thread-safe in-memory trip storage |
 | `cmd/server/*_test.go` | Handler, storage, and API model tests |
@@ -120,6 +150,10 @@ The contract also specifies `401` for missing or invalid Firebase tokens and `40
 | `requests.http` | Manual API requests |
 
 The HTTP handlers use Go's standard `net/http` router and structured JSON errors. The in-memory trip store is synchronized, but does not persist or enforce ownership.
+
+### Database migrations
+
+Database schema changes use PostgreSQL 17 and Goose v3.29.0. See [Database migrations](docs/database-migrations.md) for local setup, migration commands, and testing.
 
 ## Tests and checks
 
@@ -139,7 +173,7 @@ go build ./...
 
 `gofmt -l .` lists files that are not formatted and must print nothing; run `gofmt -w .` to fix them.
 
-CI runs a gofmt check, vet, build, tests, and a Docker image build. These checks do not establish production readiness or test Firebase, PostgreSQL, or Google Cloud Storage integration.
+CI runs a gofmt check, vet, build, tests, and a Docker image build. These checks do not establish production readiness or test live Firebase, PostgreSQL, or Google Cloud Storage integration. Auth middleware and route tests use a fake verifier and run without Firebase credentials; a real-token smoke test is documented separately.
 
 ## Photo metadata inspection
 
@@ -234,23 +268,9 @@ Build the container image:
 docker build -t mapmory-backend .
 ```
 
-Run it:
+The server now initializes Firebase at startup and requires `FIREBASE_PROJECT_ID`. **Building the image does not provide runtime credentials.** To run it, configure an appropriate Google Cloud runtime identity (for example, an attached service account on Google Cloud) and set `FIREBASE_PROJECT_ID=mapmory-development` in the deployment environment. Simply running `docker run -p 8080:8080 mapmory-backend` without this configuration is no longer a supported smoke test.
 
-```bash
-docker run --rm -p 8080:8080 mapmory-backend
-```
-
-Check its health endpoint:
-
-```bash
-curl -i http://localhost:8080/healthz
-```
-
-To change the listening port:
-
-```bash
-docker run --rm -e PORT=9090 -p 9090:9090 mapmory-backend
-```
+For local HTTP smoke tests, use `go run ./cmd/server` with the keyless ADC setup above. Local Docker credential forwarding is not documented here; do not bake ADC files or private keys into images.
 
 The image uses a distroless runtime and runs as a nonroot user. It has no shell or package manager. Container restarts also discard the current in-memory trips.
 
@@ -258,4 +278,4 @@ The image uses a distroless runtime and runs as a nonroot user. It has no shell 
 
 The agreed target architecture uses a Go REST API, PostgreSQL for metadata, Google Cloud Storage with signed upload URLs for photos, Firebase Auth for identity, and Google Cloud deployment. These are **design decisions, not claims of current implementation**.
 
-Next integration milestones include Firebase token verification and ownership checks, database migrations and persistence, photo upload registration/completion, asynchronous metadata processing, and retrieval of photo status. See the [OpenAPI contract](openapi/openapi.yaml) for the proposed request and response shapes; it remains a review draft and may evolve with frontend integration.
+Next integration milestones include database user resolution and trip ownership checks, database migrations and persistence, photo upload registration/completion, asynchronous metadata processing, and retrieval of photo status. See the [OpenAPI contract](openapi/openapi.yaml) for the proposed request and response shapes; it remains a review draft and may evolve with frontend integration.

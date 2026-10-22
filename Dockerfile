@@ -1,10 +1,10 @@
 # Build stage: compiles the server into a single statically linked binary.
-FROM golang:1.26.1-bookworm AS build
+FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
 
 # Dependency manifest is copied alone so go mod download stays cached across source-only edits.
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/TravelMapMory/mapmory-backend/internal/auth"
 	"github.com/google/uuid"
 )
 
@@ -150,6 +152,53 @@ func newHandler() http.Handler {
 	return mux
 }
 
+// authMeHandler returns the authenticated user's identity as JSON, or a 401 Unauthorized
+// response if the request is not authenticated.
+func authMeHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	identity, ok := auth.IdentityFromContext(r.Context())
+	if !ok {
+		writeError(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+			"authentication required",
+		)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, struct {
+		UID string `json:"uid"`
+	}{
+		UID: identity.UID,
+	})
+}
+
+// newHandlerWithVerifier creates a new HTTP handler with the necessary routes and handlers
+// for the MapMory backend service, including authentication middleware that verifies
+// Firebase ID tokens using the provided verifier.
+func newHandlerWithVerifier(
+	verifier auth.Verifier,
+) http.Handler {
+	mux := http.NewServeMux()
+
+	// Reuse existing trip routes for now.
+	mux.Handle("/", newHandler())
+
+	// Demonstrate authenticated identity.
+	mux.Handle(
+		"GET /api/auth/me",
+		auth.RequireIdentity(
+			verifier,
+			http.HandlerFunc(authMeHandler),
+		),
+	)
+
+	return mux
+}
+
 // listenAddr returns the address to bind, honouring the PORT variable that
 // hosted environments inject and falling back to 8080 for local runs.
 func listenAddr() string {
@@ -160,11 +209,22 @@ func listenAddr() string {
 	return ":" + port
 }
 
-// main wires the routes and serves until the listener fails.
+// main is the entry point for the MapMory backend service. It initializes the Firebase
+// verifier and starts the HTTP server with the appropriate handlers.
 func main() {
+	ctx := context.Background()
+	verifier, err := auth.NewFirebaseVerifier(
+		ctx,
+		os.Getenv("FIREBASE_PROJECT_ID"),
+	)
+	if err != nil {
+		log.Fatalf("initialize authentication: %v", err)
+	}
+
+	handler := newHandlerWithVerifier(verifier)
 	addr := listenAddr()
 	log.Printf("listening on %s", addr)
-	if err := http.ListenAndServe(addr, newHandler()); err != nil {
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatal(err)
 	}
 }
