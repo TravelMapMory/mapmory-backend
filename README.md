@@ -104,7 +104,15 @@ curl -i http://localhost:8080/api/auth/me \
 
 A valid token returns `200` with `{"uid":"<verified Firebase UID>"}`. See the [Firebase testing guide](docs/firebase-auth-testing.md) for a safe, reproducible real-token test. Never substitute the Google OAuth token from `gcloud auth application-default print-access-token` here.
 
-More examples, including authenticated and rejected requests, trip creation, and invalid inputs, are in [`requests.http`](requests.http). The file supports VS Code's REST Client extension. Follow the [real-token walkthrough](docs/firebase-auth-testing.md) to obtain a Firebase ID token and write it into a local, Git-ignored `.env` file **before clearing the shell variable**. `.env.example` documents `FIREBASE_WEB_API_KEY`, disposable test-user credentials, and the temporary `FIREBASE_ID_TOKEN` used by REST Client. Keep these values in a local, ignored `.env` file, and follow the testing guide to add the token **without overwriting other entries**. Only use disposable test-account passwords, never real credentials. The Go server does not load `.env` automatically; the testing guide reads the Web API key and disposable test credentials explicitly. Remove the ID token from `.env` after testing; never commit real ID tokens.
+More examples, including authenticated and rejected requests, are in [`requests.http`](requests.http) for VS Code's REST Client extension. For local testing, prepare a Git-ignored `.env` yourself (see [Firebase authentication testing](docs/firebase-auth-testing.md)); neither the backend nor the helper creates the file, and the Go server does not load it automatically. With a disposable Firebase test account and `FIREBASE_WEB_API_KEY`, `TEST_EMAIL`, and `TEST_PASSWORD` configured, refresh its ID token using:
+
+```bash
+scripts/firebase-id-token.sh
+# Optional: obtain and save a token, then verify it against the running API
+scripts/firebase-id-token.sh --check http://localhost:8080
+```
+
+The helper writes `FIREBASE_ID_TOKEN` for `{{$dotenv FIREBASE_ID_TOKEN}}` references in `requests.http`. It does not export that token into your shell; for shell-based `curl` commands, see the guide's `--print` option. The Go server still requires `FIREBASE_PROJECT_ID` in its **process environment**. Protect `.env` with `chmod 600 .env`, do not use personal credentials, and never commit or share tokens or passwords. The [testing guide](docs/firebase-auth-testing.md) explains setup, error handling, and cleanup.
 
 ## Implemented endpoints
 

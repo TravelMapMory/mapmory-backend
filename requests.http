@@ -13,6 +13,7 @@
 # Never commit `.env` or paste tokens into this tracked file.
 
 @baseUrl = http://localhost:8080
+# @baseUrl = https://mapmory.app
 
 ### Health check — public (200)
 GET {{baseUrl}}/healthz

@@ -31,7 +31,7 @@ Use a **disposable Firebase test account** belonging to you, created through an 
 
 The Firebase Web API key is public Firebase web-app configuration. Obtain it from the project administrator; it is **not** a Google service-account credential.
 
-Before modifying `.env`, check whether it already exists in the **backend repository root**. **Do not overwrite an existing file**: preserve other local settings. Confirm it is ignored by Git (`git check-ignore .env`). If creating it, use restrictive permissions (for example `umask 077` before creating with an editor, and `chmod 600 .env` afterward on Unix-like systems).
+The `.env` file is **not created automatically** by the backend or the token helper. Before modifying it, check whether it already exists in the **backend repository root**. Do not overwrite an existing file: preserve other local settings. Confirm it is ignored by Git (`git check-ignore .env`). If you need to create it, use `umask 077` and `cp -n .env.example .env` from the repository root (or create it securely with an editor). In either case, run `chmod 600 .env` on Unix-like systems. The helper preserves existing file permissions; it **does not correct an overly permissive mode**.
 
 Add or update these entries in your **local, ignored** `.env`:
 
@@ -47,16 +47,16 @@ TEST_PASSWORD=your-disposable-test-user-password
 
 ### Shortcut: `scripts/firebase-id-token.sh`
 
-Once the `.env` from section 2 exists, one command signs in and saves a fresh token as `FIREBASE_ID_TOKEN` in it. This is the same flow as the manual steps below, so `requests.http` (section 4) and `curl` work again after the roughly one-hour expiry:
+Once the `.env` from section 2 exists, one command signs in and saves a fresh token as `FIREBASE_ID_TOKEN` in it. This is an alternative to the manual sign-in steps below. The saved token is available to `requests.http` (section 4); for command-line `curl`, use `--print` to export it to your current shell:
 
 ```bash
 scripts/firebase-id-token.sh                                 # sign in, update FIREBASE_ID_TOKEN in .env
 scripts/firebase-id-token.sh --check http://localhost:8080   # ...then call GET /api/auth/me (200)
 scripts/firebase-id-token.sh --check https://mapmory.app     # ...against a deployed backend
-export FIREBASE_ID_TOKEN=$(scripts/firebase-id-token.sh --print)   # also hand the token to this shell
+export FIREBASE_ID_TOKEN="$(scripts/firebase-id-token.sh --print)" # also hand the token to this shell
 ```
 
-The script needs `curl` and `jq`. It reads `FIREBASE_WEB_API_KEY`, `TEST_EMAIL` and `TEST_PASSWORD` from `.env` without sourcing it, and it never creates `.env`: if the file or a variable is missing it stops and says what to add. Only the `FIREBASE_ID_TOKEN` line is replaced (or appended); every other line and the file's permissions are kept. It never prints the password or the API key, and prints the token only if you pass `--print` (then only the token goes to stdout and all messages to stderr). On failure it shows Firebase's error message, for example `INVALID_LOGIN_CREDENTIALS`. With `--check`, it exits non-zero unless `/api/auth/me` returns 200.
+The script needs `curl` and `jq`. It reads `FIREBASE_WEB_API_KEY`, `TEST_EMAIL` and `TEST_PASSWORD` from `.env` without sourcing it, and it never creates `.env`: if the file or a variable is missing it stops and says what to add. The first `FIREBASE_ID_TOKEN` line is replaced (or a line is appended if absent), and any duplicate token entries are removed; other configuration lines and the file mode are kept. The helper does not enforce restrictive permissions, so check with `ls -l .env` and use `chmod 600 .env` if needed. It never prints the password or the API key, and prints the token only if you pass `--print` (then only the token goes to stdout and all messages to stderr). On failure it shows Firebase's error message, for example `INVALID_LOGIN_CREDENTIALS`. With `--check`, the token is **saved before** the API request, so a connection failure or non-200 response does not undo a successful sign-in or roll back `.env`. The command exits non-zero unless `/api/auth/me` returns 200; its current implementation also prints the response body, so avoid using it against endpoints returning sensitive data.
 
 To sign in against the Firebase Auth emulator instead of the real project, set `FIREBASE_AUTH_EMULATOR_HOST` (for example `127.0.0.1:9099`) first. The script prints which endpoint it uses; `unset FIREBASE_AUTH_EMULATOR_HOST` to go back to the real project.
 
@@ -98,7 +98,7 @@ FIREBASE_ID_TOKEN=your-newly-obtained-firebase-id-token
 
 Do not copy this token into tracked files or a GitHub comment. Do not use `> .env`, as that overwrites the other entries. In VS Code, run **Authentication — valid Firebase user ID token (200)** from [`requests.http`](../requests.http).
 
-ID tokens typically expire after about an hour; sign in again and replace the entry when necessary. Remove the `FIREBASE_ID_TOKEN` line after testing. The Web API key may remain, but remove disposable test credentials when no longer needed.
+ID tokens typically expire after about an hour; rerun the helper (or sign in manually) to replace the entry when necessary. Remove the `FIREBASE_ID_TOKEN` line after testing. The Web API key may remain, but remove disposable test credentials when no longer needed.
 
 In your shell, clear values after finishing:
 
