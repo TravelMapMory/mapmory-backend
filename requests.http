@@ -3,14 +3,17 @@
 # Authentication examples use a real Firebase *user ID token*, not the
 # Google OAuth token returned by `gcloud auth application-default`.
 #
-# To run the authenticated example, obtain a Firebase ID token as described in
-# docs/firebase-auth-testing.md, then put this line in a local, ignored `.env`:
+# To run the authenticated example, refresh a Firebase ID token with
+#   scripts/firebase-id-token.sh
+# (or obtain one by hand as described in docs/firebase-auth-testing.md). Either
+# way, it ends up as this line in a local, ignored `.env`:
 #   FIREBASE_ID_TOKEN=<your short-lived Firebase ID token>
 #
 # The REST Client's {{$dotenv FIREBASE_ID_TOKEN}} variable reads it from `.env`.
 # Never commit `.env` or paste tokens into this tracked file.
 
 @baseUrl = http://localhost:8080
+# @baseUrl = https://mapmory.app
 
 ### Health check — public (200)
 GET {{baseUrl}}/healthz
