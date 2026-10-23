@@ -30,48 +30,16 @@ Goose is installed as a development tool, not as a dependency of the backend app
 
 ## 2. Local PostgreSQL
 
-For development, start a disposable PostgreSQL 17 container:
+The [application-user resolution guide](application-user-resolution.md) has the canonical **persistent local container** setup (`mapmory-postgres`, host port 5432, named volume). Use that setup when developing the HTTP API. A named volume preserves users between container restarts.
+
+After starting that container, use the URL configured in your repository-root `.env` for Goose. Unlike the Go server, **Goose does not read `.env`**:
 
 ```bash
-docker run --rm \
-  --name mapmory-postgres \
-  -e POSTGRES_USER=mapmory \
-  -e POSTGRES_PASSWORD=local-only \
-  -e POSTGRES_DB=mapmory \
-  -p 127.0.0.1:5433:5432 \
-  -d postgres:17
+export DATABASE_URL="$(sed -n 's/^DATABASE_URL=//p' .env | tail -n 1)"
+docker exec mapmory-postgres pg_isready -U mapmory -d mapmory
 ```
 
-The container exposes PostgreSQL on port `5433` of the local machine, while PostgreSQL listens on port `5432` inside the container.
-
-Check that it is ready:
-
-```bash
-docker exec mapmory-postgres \
-  pg_isready -U mapmory -d mapmory
-```
-
-Configure the connection URL in the current terminal:
-
-```bash
-export DATABASE_URL='postgres://mapmory:local-only@127.0.0.1:5433/mapmory?sslmode=disable'
-```
-
-Use the published host port shown by Docker if it differs:
-
-```bash
-docker port mapmory-postgres 5432
-```
-
-The password and disabled TLS configuration above are intended only for disposable local development.
-
-**Data persistence:** This container does not use a persistent Docker volume. Removing it discards its database contents. Stop and remove it with:
-
-```bash
-docker stop mapmory-postgres
-```
-
-Do not use this configuration for production or shared databases.
+The username, password, and disabled TLS setting in the local guide are strictly for a database bound to `127.0.0.1`. For isolated migration lifecycle tests, prefer `./scripts/test-migrations.sh`: it starts a separate temporary PostgreSQL instance and removes it afterward. The two test harnesses never use your normal local `DATABASE_URL`.
 
 ## 3. Migration structure
 
@@ -266,7 +234,7 @@ Database migration testing is independent of ordinary Go unit tests and requires
 - Test destructive migration operations only on isolated, disposable databases.
 - Never commit actual database credentials or use local testing commands against production.
 
-The initial schema deliberately does not introduce an ORM or repository implementation.
+The schema is independent of application repositories; the current user repository is implemented in `internal/users`.
 
 ## 7. Related work
 
@@ -276,4 +244,4 @@ This database foundation supports:
 - **Backend #17:** Persisting trips using PostgreSQL.
 - **Backend #9:** Enforcing owner-only access to trips.
 
-Application-level database access, ownership enforcement, photo/upload schema, Cloud SQL provisioning, and production migration execution are outside the scope of backend #7.
+User resolution now exists separately under backend #32. Ownership enforcement, photo/upload schema, Cloud SQL provisioning, and production migration execution remain separate work.

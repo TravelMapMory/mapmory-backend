@@ -308,6 +308,10 @@ func listenAddr() string {
 // main is the entry point for the MapMory backend service. It initializes the Firebase
 // verifier and starts the HTTP server with the appropriate handlers.
 func main() {
+	if err := loadLocalEnv(".env"); err != nil {
+		log.Fatalf("load local configuration: %v", err)
+	}
+
 	ctx := context.Background()
 	verifier, err := auth.NewFirebaseVerifier(
 		ctx,
