@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/TravelMapMory/mapmory-backend/internal/appuser"
 	"github.com/TravelMapMory/mapmory-backend/internal/auth"
 	"github.com/google/uuid"
 )
@@ -176,6 +177,33 @@ func authMeHandler(
 	})
 }
 
+// userMeHandler returns the resolved application-user identity.
+//
+// Both identifiers are obtained from trusted request context values,
+// populated by the authentication and user-resolution middleware.
+func userMeHandler(w http.ResponseWriter, r *http.Request) {
+	firebaseIdentity, firebaseOK := auth.IdentityFromContext(r.Context())
+	userIdentity, userOK := appuser.IdentityFromContext(r.Context())
+
+	if !firebaseOK || !userOK {
+		writeError(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+			"application identity required",
+		)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, struct {
+		ID          string `json:"id"`
+		AuthSubject string `json:"auth_subject"`
+	}{
+		ID:          userIdentity.ID.String(),
+		AuthSubject: firebaseIdentity.UID,
+	})
+}
+
 // newHandlerWithVerifier creates a new HTTP handler with the necessary routes and handlers
 // for the MapMory backend service, including authentication middleware that verifies
 // Firebase ID tokens using the provided verifier.
@@ -193,6 +221,35 @@ func newHandlerWithVerifier(
 		auth.RequireIdentity(
 			verifier,
 			http.HandlerFunc(authMeHandler),
+		),
+	)
+
+	return mux
+}
+
+// newHandlerWithResolver extends the existing API with database-backed
+// application-user resolution.
+//
+// Firebase verification always runs before the user resolver. Existing
+// endpoints retain their current behavior.
+func newHandlerWithResolver(
+	verifier auth.Verifier,
+	resolver appuser.Resolver,
+) http.Handler {
+	mux := http.NewServeMux()
+
+	// Preserve all existing routes, including the Firebase-only
+	// /api/auth/me diagnostic endpoint.
+	mux.Handle("/", newHandlerWithVerifier(verifier))
+
+	mux.Handle(
+		"GET /api/users/me",
+		auth.RequireIdentity(
+			verifier,
+			appuser.RequireIdentity(
+				resolver,
+				http.HandlerFunc(userMeHandler),
+			),
 		),
 	)
 
