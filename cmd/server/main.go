@@ -4,6 +4,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +15,8 @@ import (
 
 	"github.com/TravelMapMory/mapmory-backend/internal/appuser"
 	"github.com/TravelMapMory/mapmory-backend/internal/auth"
+	"github.com/TravelMapMory/mapmory-backend/internal/postgres"
+	"github.com/TravelMapMory/mapmory-backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -256,6 +260,41 @@ func newHandlerWithResolver(
 	return mux
 }
 
+// newConfiguredHandler constructs the HTTP handler and initializes any
+// database dependencies explicitly enabled by server configuration.
+//
+// The returned cleanup function releases resources owned by the handler.
+// The caller must invoke it during server shutdown.
+func newConfiguredHandler(
+	ctx context.Context,
+	verifier auth.Verifier,
+) (http.Handler, func(), error) {
+	if os.Getenv("MAPMORY_ENABLE_DB_USER_RESOLUTION") != "true" {
+		return newHandlerWithVerifier(verifier), func() {}, nil
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if strings.TrimSpace(databaseURL) == "" {
+		return nil, nil, errors.New(
+			"DATABASE_URL is required when database-backed user resolution is enabled",
+		)
+	}
+
+	db, err := postgres.Open(ctx, databaseURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"initialize database-backed user resolution: %w",
+			err,
+		)
+	}
+
+	repository := users.NewRepository(db)
+
+	return newHandlerWithResolver(verifier, repository), func() {
+		_ = db.Close()
+	}, nil
+}
+
 // listenAddr returns the address to bind, honouring the PORT variable that
 // hosted environments inject and falling back to 8080 for local runs.
 func listenAddr() string {
@@ -278,7 +317,12 @@ func main() {
 		log.Fatalf("initialize authentication: %v", err)
 	}
 
-	handler := newHandlerWithVerifier(verifier)
+	handler, cleanup, err := newConfiguredHandler(ctx, verifier)
+	if err != nil {
+		log.Fatalf("initialize server: %v", err)
+	}
+	defer cleanup()
+
 	addr := listenAddr()
 	log.Printf("listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {
