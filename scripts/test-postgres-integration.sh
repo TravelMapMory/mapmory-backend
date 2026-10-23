@@ -14,6 +14,7 @@ MIGRATIONS_DIR="$ROOT_DIR/db/migrations"
 
 TEST_PACKAGES=(
   ./internal/postgres
+  ./internal/users
 )
 
 CONTAINER_ID=""
@@ -115,4 +116,4 @@ section "Running Go integration tests"
 cd "$ROOT_DIR"
 
 MAPMORY_TEST_DATABASE_URL="$TEST_URL" \
-  go test -tags=integration -count=1 -v "${TEST_PACKAGES[@]}"
+  go test -race -tags=integration -count=1 -v "${TEST_PACKAGES[@]}"
