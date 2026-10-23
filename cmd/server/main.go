@@ -269,8 +269,18 @@ func newConfiguredHandler(
 	ctx context.Context,
 	verifier auth.Verifier,
 ) (http.Handler, func(), error) {
-	if os.Getenv("MAPMORY_ENABLE_DB_USER_RESOLUTION") != "true" {
+	switch value := os.Getenv("MAPMORY_ENABLE_DB_USER_RESOLUTION"); value {
+	case "", "false":
 		return newHandlerWithVerifier(verifier), func() {}, nil
+
+	case "true":
+		// Continue initializing PostgreSQL.
+
+	default:
+		return nil, nil, fmt.Errorf(
+			"invalid MAPMORY_ENABLE_DB_USER_RESOLUTION value %q: expected true or false",
+			value,
+		)
 	}
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -305,31 +315,45 @@ func listenAddr() string {
 	return ":" + port
 }
 
-// main is the entry point for the MapMory backend service. It initializes the Firebase
-// verifier and starts the HTTP server with the appropriate handlers.
-func main() {
+// run initializes the backend and serves HTTP until the server stops.
+//
+// Resources created during initialization are released before run returns,
+// including when the HTTP server fails to start.
+func run() error {
 	if err := loadLocalEnv(".env"); err != nil {
-		log.Fatalf("load local configuration: %v", err)
+		return fmt.Errorf("load local configuration: %w", err)
 	}
 
 	ctx := context.Background()
+
 	verifier, err := auth.NewFirebaseVerifier(
 		ctx,
 		os.Getenv("FIREBASE_PROJECT_ID"),
 	)
 	if err != nil {
-		log.Fatalf("initialize authentication: %v", err)
+		return fmt.Errorf("initialize authentication: %w", err)
 	}
 
 	handler, cleanup, err := newConfiguredHandler(ctx, verifier)
 	if err != nil {
-		log.Fatalf("initialize server: %v", err)
+		return fmt.Errorf("initialize server: %w", err)
 	}
 	defer cleanup()
 
 	addr := listenAddr()
 	log.Printf("listening on %s", addr)
+
 	if err := http.ListenAndServe(addr, handler); err != nil {
+		return fmt.Errorf("serve HTTP: %w", err)
+	}
+
+	return nil
+}
+
+// main reports startup and server failures after run has released
+// any resources it initialized.
+func main() {
+	if err := run(); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -132,5 +133,46 @@ func TestNewConfiguredHandlerPropagatesDatabaseFailure(t *testing.T) {
 	}
 	if cleanup != nil {
 		t.Error("expected no cleanup function after database failure")
+	}
+}
+
+func TestNewConfiguredHandlerRejectsInvalidFeatureFlag(t *testing.T) {
+	for _, value := range []string{
+		"treu",
+		"TRUE",
+		"1",
+		"yes",
+		" ",
+	} {
+		t.Run(fmt.Sprintf("%q", value), func(t *testing.T) {
+			t.Setenv("MAPMORY_ENABLE_DB_USER_RESOLUTION", value)
+			t.Setenv("DATABASE_URL", "")
+
+			handler, cleanup, err := newConfiguredHandler(
+				context.Background(),
+				nil,
+			)
+
+			if err == nil {
+				if cleanup != nil {
+					cleanup()
+				}
+				t.Fatal("expected invalid feature flag error")
+			}
+
+			if handler != nil {
+				t.Error("expected no handler")
+			}
+			if cleanup != nil {
+				t.Error("expected no cleanup function")
+			}
+
+			if !strings.Contains(
+				err.Error(),
+				"invalid MAPMORY_ENABLE_DB_USER_RESOLUTION",
+			) {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
 	}
 }
