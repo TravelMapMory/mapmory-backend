@@ -1,9 +1,9 @@
 # Firebase Authentication — testing
 
-This guide covers local/manual verification of Firebase ID tokens and automated Go tests. For project access, keyless ADC and backend startup, start with [Firebase Authentication — local development](firebase-auth-setup.md).
+This guide primarily covers Firebase authentication through `GET /api/auth/me`, which does not require PostgreSQL. Database-backed identity resolution through `GET /api/users/me` is documented separately in [Application-user resolution](application-user-resolution.md). Neither endpoint currently enforces trip ownership.
 
 **Project:** `mapmory-development`  
-**Scope:** `GET /api/auth/me` only. Existing in-memory trip endpoints are **not** authenticated or owner-secured.
+**Scope:** Obtaining a test Firebase ID token and checking `/api/auth/me`. See [Application-user resolution](application-user-resolution.md) for `/api/users/me`. Trips are still public prototypes.
 
 ## 1. Verify the running API
 
@@ -41,7 +41,7 @@ TEST_EMAIL=your-disposable-test-user@example.com
 TEST_PASSWORD=your-disposable-test-user-password
 ```
 
-**Security:** `TEST_PASSWORD` is stored in plaintext. This is a convenience for disposable test-only credentials, not a recommendation for real accounts. Never commit or share `.env`. If you prefer not to store even test passwords on disk, use your shell's interactive input or an OS credential manager instead. The backend itself does not load this `.env` file.
+**Security:** `TEST_PASSWORD` is stored in plaintext for a disposable test account. Never commit or share `.env`. The Go backend reads only three server configuration keys from `.env`; it does not import `TEST_PASSWORD`, `TEST_EMAIL`, `FIREBASE_WEB_API_KEY` or `FIREBASE_ID_TOKEN` into its environment.
 
 ## 3. Sign in and obtain a Firebase ID token
 
@@ -106,7 +106,7 @@ In your shell, clear values after finishing:
 unset RESPONSE FIREBASE_ID_TOKEN TEST_EMAIL TEST_PASSWORD FIREBASE_WEB_API_KEY
 ```
 
-**Never** paste the OAuth access token from `gcloud auth application-default print-access-token` into the API's `Authorization` header. It is a Google Cloud token, not a Firebase user ID token.
+**Never** use the OAuth token from `gcloud auth application-default print-access-token` as a Firebase user ID token.
 
 ## 5. Automated tests
 
@@ -121,4 +121,4 @@ go vet ./...
 
 ## What is not covered
 
-`GET /api/auth/me` demonstrates verified identity only. It does not resolve a PostgreSQL user or enforce trip ownership. Ordinary Firebase `VerifyIDToken` does not check token revocation. These concerns belong to subsequent issues under backend #8.
+`GET /api/auth/me` checks Firebase only. The separate `/api/users/me` route resolves a PostgreSQL user when enabled. Neither endpoint implements trip ownership. Ordinary Firebase `VerifyIDToken` does not check token revocation.

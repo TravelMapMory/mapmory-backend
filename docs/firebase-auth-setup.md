@@ -4,7 +4,7 @@
 **Authentication provider:** Firebase Email/Password  
 **Local backend credentials:** keyless Google Cloud service-account impersonation (no private-key downloads)
 
-> **Current state (18 October 2026):** The Firebase project, Email/Password provider, and Web app are configured. Ki Chun has verified local ADC impersonation. **Firebase ID-token verification is now implemented for `GET /api/auth/me` and has been manually tested with a real Firebase user token.** The current trip endpoints still use in-memory data and do not enforce authentication or ownership.
+> **Current state:** Firebase ID-token verification is implemented at `/api/auth/me`. The optional `/api/users/me` endpoint also resolves the verified UID to a PostgreSQL application user; see [Application-user resolution](application-user-resolution.md). Prototype trip routes remain unprotected and in-memory.
 
 For manual sign-in and automated verification, see [Firebase Authentication — testing](firebase-auth-testing.md).
 
@@ -114,7 +114,7 @@ unset GOOGLE_APPLICATION_CREDENTIALS
 go run ./cmd/server
 ```
 
-**Important:** the backend now requires `FIREBASE_PROJECT_ID` at startup and initializes the Firebase Admin SDK. The `/api/auth/me` route verifies user ID tokens. The existing trip endpoints are still unprotected. `gcloud` ADC is discovered automatically when needed. `.env.example` is a reference, not an automatically loaded file.
+**Important:** The backend initializes the Firebase Admin SDK at startup. From the repository root, it reads `FIREBASE_PROJECT_ID` and the other two server configuration keys from an optional `.env`; explicitly exported values take precedence. `gcloud` ADC is discovered through Google’s credential chain. The trip endpoints remain unprotected.
 
 The React frontend separately needs the registered **Firebase Web app configuration** (`apiKey`, `authDomain`, `projectId`, `appId`, etc.), provided by the project administrator. These identifiers are not service-account credentials. See the frontend's integration issue for wiring them into the Firebase Web SDK.
 
