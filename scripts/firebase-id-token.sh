@@ -52,9 +52,9 @@ read_env_value() {
   sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 | tr -d '\r'
 }
 
-# Replace every FIREBASE_ID_TOKEN= line in the env file with token $1, or append
-# one when absent, keeping all other lines and the file mode. A symlinked env
-# file is written through, so the link and the file it points to stay intact.
+# Replace the first FIREBASE_ID_TOKEN= line and remove subsequent duplicates,
+# or append one when absent, keeping all other lines and the file mode.
+# A symlinked env file is written through, so the link and its target remain.
 save_token() {
   local token="$1" line found=false target
 
@@ -68,8 +68,10 @@ save_token() {
   # The "|| [[ -n ... ]]" keeps a final line that lacks a trailing newline.
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" == FIREBASE_ID_TOKEN=* ]]; then
-      printf 'FIREBASE_ID_TOKEN=%s\n' "$token"
-      found=true
+      if [[ "$found" == false ]]; then
+         printf 'FIREBASE_ID_TOKEN=%s\n' "$token"
+         found=true
+       fi
     else
       printf '%s\n' "$line"
     fi
