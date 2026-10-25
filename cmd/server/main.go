@@ -299,9 +299,10 @@ func newConfiguredHandler(
 
 	dependencies := newDatabaseDependencies(db)
 
-	// The trip repository is prepared here but not routed until the
-	// authenticated trip handlers are introduced in the next commit.
-	return newHandlerWithResolver(verifier, dependencies.users), func() {
+	// Persistent trip routes require both verified Firebase identity and
+	// resolved application-user identity. The legacy handler is used only
+	// when database-backed mode is disabled.
+	return newHandlerWithPersistentTrips(verifier, dependencies.users, dependencies.trips), func() {
 		_ = db.Close()
 	}, nil
 }

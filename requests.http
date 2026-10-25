@@ -51,29 +51,48 @@ Authorization: Bearer invalid-token
 GET {{baseUrl}}/api/users/me
 Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 
-# WARNING: /api/users/me resolves a persistent application user, but trip
-# endpoints are still UNPROTECTED and use process-wide, in-memory storage.
-# Successful authentication does not imply trip ownership enforcement.
+# Trip examples below target database-backed mode, enabled by:
+#   MAPMORY_ENABLE_DB_USER_RESOLUTION=true
+#   DATABASE_URL=<PostgreSQL connection URL>
+# Apply Goose migrations before starting the server.
+# With the flag disabled, the legacy trip endpoints remain public,
+# process-local and in-memory; these examples do not test that mode.
+# These requests operate on your configured database, not a throwaway fixture.
 
-### List trips — currently public (200)
+### List trips — missing bearer token (401 in database mode)
 GET {{baseUrl}}/api/trips
 
-### Create trip — currently public (201)
+### List trips — invalid bearer token (401 in database mode)
+GET {{baseUrl}}/api/trips
+Authorization: Bearer invalid-token
+
+### List my trips — authenticated (200)
+GET {{baseUrl}}/api/trips
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+
+### Create my trip — authenticated (201)
 # @name createTrip
 POST {{baseUrl}}/api/trips
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 Content-Type: application/json
 
 {
-  "title": "Japan",
-  "notes": "Summer trip"
+  "title": "Japan 2026",
+  "notes": "Tokyo and Kyoto"
 }
 
-### Get the trip created above (200)
-# Run "Create trip" first; the server must not have restarted.
+### Get the trip created above — authenticated (200)
+# Run "Create my trip" first with the same Firebase test account.
 GET {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+
+### Missing trip — authenticated (404)
+GET {{baseUrl}}/api/trips/00000000-0000-4000-8000-000000000000
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 
 ### Invalid trip — blank title (400)
 POST {{baseUrl}}/api/trips
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 Content-Type: application/json
 
 {
@@ -82,6 +101,7 @@ Content-Type: application/json
 
 ### Invalid trip — unknown field (400)
 POST {{baseUrl}}/api/trips
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 Content-Type: application/json
 
 {
@@ -89,5 +109,17 @@ Content-Type: application/json
   "titel": "typo"
 }
 
-### Missing trip — JSON 404
-GET {{baseUrl}}/api/trips/00000000-0000-4000-8000-000000000000
+### Invalid trip — trailing JSON value (400)
+POST {{baseUrl}}/api/trips
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+Content-Type: application/json
+
+{"title":"Japan"}{"title":"Other"}
+
+### Create trip — missing bearer token (401 in database mode)
+POST {{baseUrl}}/api/trips
+Content-Type: application/json
+
+{
+  "title": "Should not be created"
+}
