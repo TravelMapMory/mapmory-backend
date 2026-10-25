@@ -16,6 +16,7 @@ TEST_PACKAGES=(
   ./internal/postgres
   ./internal/users
   ./internal/trips
+  ./cmd/server
 )
 
 CONTAINER_ID=""
