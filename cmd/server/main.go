@@ -16,7 +16,6 @@ import (
 	"github.com/TravelMapMory/mapmory-backend/internal/appuser"
 	"github.com/TravelMapMory/mapmory-backend/internal/auth"
 	"github.com/TravelMapMory/mapmory-backend/internal/postgres"
-	"github.com/TravelMapMory/mapmory-backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -298,9 +297,11 @@ func newConfiguredHandler(
 		)
 	}
 
-	repository := users.NewRepository(db)
+	dependencies := newDatabaseDependencies(db)
 
-	return newHandlerWithResolver(verifier, repository), func() {
+	// The trip repository is prepared here but not routed until the
+	// authenticated trip handlers are introduced in the next commit.
+	return newHandlerWithResolver(verifier, dependencies.users), func() {
 		_ = db.Close()
 	}, nil
 }
