@@ -15,6 +15,7 @@ MIGRATIONS_DIR="$ROOT_DIR/db/migrations"
 TEST_PACKAGES=(
   ./internal/postgres
   ./internal/users
+  ./internal/trips
 )
 
 CONTAINER_ID=""
