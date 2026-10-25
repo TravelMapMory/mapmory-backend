@@ -104,7 +104,10 @@ run_constraints
 log "Checking repeated migration application"
 migrate up
 
-log "Rolling back the initial migration"
+log "Rolling back title-constraint migration (00002)"
+migrate down
+
+log "Rolling back initial schema migration (00001)"
 migrate down
 
 log "Verifying that application tables were removed"
@@ -122,7 +125,7 @@ if [[ "$remaining_tables" != "0" ]]; then
   exit 1
 fi
 
-log "Reapplying migrations"
+log "Reapplying both migrations"
 migrate up
 
 log "Rerunning schema constraint tests"

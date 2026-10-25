@@ -1,6 +1,6 @@
 # Application-user resolution
 
-Firebase Authentication verifies the caller; PostgreSQL identifies that caller within MapMory. `GET /api/users/me` demonstrates the full path without enabling authorization on the prototype trip routes.
+Firebase Authentication verifies the caller; PostgreSQL identifies that caller within MapMory. `GET /api/users/me` demonstrates the identity-resolution path. With database mode enabled, persistent trip routes use the same trusted identity.
 
 ## Request flow
 
@@ -13,7 +13,7 @@ Authorization: Bearer <Firebase ID token>
 
 The repository uses `INSERT ... ON CONFLICT (auth_subject) DO NOTHING`, followed by a separate `SELECT` for an existing user. PostgreSQL's unique constraint ensures concurrent first-time requests cannot create duplicate users. Handlers read the internal UUID from the trusted request context, never from client-supplied `owner_id` fields.
 
-`/api/auth/me` verifies Firebase only and works without PostgreSQL. `/api/users/me` additionally requires database-backed user resolution.
+`/api/auth/me` verifies Firebase only and works without PostgreSQL. `/api/users/me` and the owner-scoped PostgreSQL trip routes require database-backed user resolution. See [Trip persistence](trip-persistence.md).
 
 ## Local setup
 
@@ -113,4 +113,4 @@ The repository integration suite uses its **own disposable** PostgreSQL containe
 
 It covers repeated and concurrent provisioning, cancellation, and database failures. The middleware and HTTP router have separate tests using fake Firebase verifiers and user resolvers (`go test ./...`).
 
-**Current limitations:** Production VM configuration for PostgreSQL is pending. Trip endpoints remain public and in-memory; [trip ownership enforcement](https://github.com/TravelMapMory/mapmory-backend/issues/9) is separate. Ordinary Firebase ID-token verification does not check revocation by default.
+**Current limitations:** Production VM configuration for PostgreSQL is pending. Trip endpoints are authenticated and owner-scoped when the database feature is enabled. With the flag disabled, legacy trips are public and in-memory. The VM still needs production PostgreSQL provisioning and migration execution. Ordinary Firebase ID-token verification does not check revocation by default.
