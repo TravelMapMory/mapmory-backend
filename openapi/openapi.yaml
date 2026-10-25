@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: MapMory — minimal private-flow draft
   version: 0.0.5
-  description: 'PROPOSED, pending team review. Covers owned trips and batch-shaped
+  description: 'PROPOSED, pending team review. The authenticated create/list/get trip flow is implemented in database mode, but cursor pagination and the photo APIs remain proposed. Covers owned trips and batch-shaped
     photo upload. This is a discussion draft, not a production-ready contract. All
     routes require a Firebase ID token; local user resolution happens on authenticated
     requests. Map, geocoding, sharing, edits/deletion, retry routes and URL renewal
@@ -40,8 +40,7 @@ paths:
         in: query
         schema:
           type: string
-        description: Opaque cursor from the previous response. An invalid cursor returns
-          400.
+        description: Proposed only; cursor pagination is not implemented by the current trip API.
       - name: limit
         in: query
         schema:
@@ -49,9 +48,8 @@ paths:
           minimum: 1
           maximum: 100
           default: 20
-        description: Maximum number of items to return in this page.
-      description: 'Newest first, ordered by created_at then id. Empty collections
-        return items: [] and next_cursor: null.'
+        description: Proposed only; limit-based trip pagination is not implemented.
+      description: 'Implemented in database mode as an unpaginated, owner-scoped list ordered by created_at DESC, id DESC. Empty collections return items: [] and next_cursor: null. The cursor and limit parameters remain proposals.'
       responses:
         '200':
           description: List the current user’s trips
@@ -63,6 +61,8 @@ paths:
           $ref: '#/components/responses/400'
         '401':
           $ref: '#/components/responses/401'
+        '503':
+          $ref: '#/components/responses/503'
         '500':
           $ref: '#/components/responses/500'
       tags:
@@ -89,6 +89,8 @@ paths:
           $ref: '#/components/responses/400'
         '401':
           $ref: '#/components/responses/401'
+        '503':
+          $ref: '#/components/responses/503'
         '500':
           $ref: '#/components/responses/500'
       tags:
@@ -115,6 +117,8 @@ paths:
           $ref: '#/components/responses/401'
         '404':
           $ref: '#/components/responses/404'
+        '503':
+          $ref: '#/components/responses/503'
         '500':
           $ref: '#/components/responses/500'
       tags:
@@ -290,7 +294,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     '401':
-      description: 'Missing or invalid Firebase ID token; error.code: unauthenticated.'
+      description: 'Missing or invalid Firebase ID token; implemented error.code: unauthorized.'
       content:
         application/json:
           schema:
@@ -305,6 +309,12 @@ components:
     '409':
       description: 'Upload state prevents completion; error.code: upload_missing or
         processing_in_progress.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '503':
+      description: 'Application-user resolution unavailable; error.code: user_resolution_unavailable.'
       content:
         application/json:
           schema:
