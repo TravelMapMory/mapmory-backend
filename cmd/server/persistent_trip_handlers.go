@@ -111,12 +111,16 @@ func (h *persistentTripHandlers) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tripResponse(record))
 }
 
-// newHandlerWithPersistentTrips overrides the legacy prototype trip routes in
-// database mode. Firebase verification precedes application-user resolution.
-// Legacy routes remain available only in the explicitly disabled database mode.
+// newHandlerWithPersistentTrips registers only database-backed routes in
+// database mode. In particular, no legacy in-memory trip router is mounted:
+// unsupported methods and alternate paths cannot reach prototype storage.
 func newHandlerWithPersistentTrips(verifier auth.Verifier, resolver appuser.Resolver, repository trips.Repository) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/", newHandlerWithResolver(verifier, resolver))
+	mux.HandleFunc("GET /healthz", healthHandler)
+	mux.Handle("GET /api/auth/me", auth.RequireIdentity(verifier, http.HandlerFunc(authMeHandler)))
+	mux.Handle("GET /api/users/me", auth.RequireIdentity(verifier,
+		appuser.RequireIdentity(resolver, http.HandlerFunc(userMeHandler))))
+
 	handlers := &persistentTripHandlers{repository: repository}
 	protected := func(next http.HandlerFunc) http.Handler {
 		return auth.RequireIdentity(verifier, appuser.RequireIdentity(resolver, next))
