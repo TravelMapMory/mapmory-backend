@@ -4,6 +4,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,7 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/TravelMapMory/mapmory-backend/internal/appuser"
 	"github.com/TravelMapMory/mapmory-backend/internal/auth"
+	"github.com/TravelMapMory/mapmory-backend/internal/postgres"
+	"github.com/TravelMapMory/mapmory-backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -176,6 +181,33 @@ func authMeHandler(
 	})
 }
 
+// userMeHandler returns the resolved application-user identity.
+//
+// Both identifiers are obtained from trusted request context values,
+// populated by the authentication and user-resolution middleware.
+func userMeHandler(w http.ResponseWriter, r *http.Request) {
+	firebaseIdentity, firebaseOK := auth.IdentityFromContext(r.Context())
+	userIdentity, userOK := appuser.IdentityFromContext(r.Context())
+
+	if !firebaseOK || !userOK {
+		writeError(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+			"application identity required",
+		)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, struct {
+		ID          string `json:"id"`
+		AuthSubject string `json:"auth_subject"`
+	}{
+		ID:          userIdentity.ID.String(),
+		AuthSubject: firebaseIdentity.UID,
+	})
+}
+
 // newHandlerWithVerifier creates a new HTTP handler with the necessary routes and handlers
 // for the MapMory backend service, including authentication middleware that verifies
 // Firebase ID tokens using the provided verifier.
@@ -199,6 +231,80 @@ func newHandlerWithVerifier(
 	return mux
 }
 
+// newHandlerWithResolver extends the existing API with database-backed
+// application-user resolution.
+//
+// Firebase verification always runs before the user resolver. Existing
+// endpoints retain their current behavior.
+func newHandlerWithResolver(
+	verifier auth.Verifier,
+	resolver appuser.Resolver,
+) http.Handler {
+	mux := http.NewServeMux()
+
+	// Preserve all existing routes, including the Firebase-only
+	// /api/auth/me diagnostic endpoint.
+	mux.Handle("/", newHandlerWithVerifier(verifier))
+
+	mux.Handle(
+		"GET /api/users/me",
+		auth.RequireIdentity(
+			verifier,
+			appuser.RequireIdentity(
+				resolver,
+				http.HandlerFunc(userMeHandler),
+			),
+		),
+	)
+
+	return mux
+}
+
+// newConfiguredHandler constructs the HTTP handler and initializes any
+// database dependencies explicitly enabled by server configuration.
+//
+// The returned cleanup function releases resources owned by the handler.
+// The caller must invoke it during server shutdown.
+func newConfiguredHandler(
+	ctx context.Context,
+	verifier auth.Verifier,
+) (http.Handler, func(), error) {
+	switch value := os.Getenv("MAPMORY_ENABLE_DB_USER_RESOLUTION"); value {
+	case "", "false":
+		return newHandlerWithVerifier(verifier), func() {}, nil
+
+	case "true":
+		// Continue initializing PostgreSQL.
+
+	default:
+		return nil, nil, fmt.Errorf(
+			"invalid MAPMORY_ENABLE_DB_USER_RESOLUTION value %q: expected true or false",
+			value,
+		)
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if strings.TrimSpace(databaseURL) == "" {
+		return nil, nil, errors.New(
+			"DATABASE_URL is required when database-backed user resolution is enabled",
+		)
+	}
+
+	db, err := postgres.Open(ctx, databaseURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"initialize database-backed user resolution: %w",
+			err,
+		)
+	}
+
+	repository := users.NewRepository(db)
+
+	return newHandlerWithResolver(verifier, repository), func() {
+		_ = db.Close()
+	}, nil
+}
+
 // listenAddr returns the address to bind, honouring the PORT variable that
 // hosted environments inject and falling back to 8080 for local runs.
 func listenAddr() string {
@@ -209,22 +315,45 @@ func listenAddr() string {
 	return ":" + port
 }
 
-// main is the entry point for the MapMory backend service. It initializes the Firebase
-// verifier and starts the HTTP server with the appropriate handlers.
-func main() {
+// run initializes the backend and serves HTTP until the server stops.
+//
+// Resources created during initialization are released before run returns,
+// including when the HTTP server fails to start.
+func run() error {
+	if err := loadLocalEnv(".env"); err != nil {
+		return fmt.Errorf("load local configuration: %w", err)
+	}
+
 	ctx := context.Background()
+
 	verifier, err := auth.NewFirebaseVerifier(
 		ctx,
 		os.Getenv("FIREBASE_PROJECT_ID"),
 	)
 	if err != nil {
-		log.Fatalf("initialize authentication: %v", err)
+		return fmt.Errorf("initialize authentication: %w", err)
 	}
 
-	handler := newHandlerWithVerifier(verifier)
+	handler, cleanup, err := newConfiguredHandler(ctx, verifier)
+	if err != nil {
+		return fmt.Errorf("initialize server: %w", err)
+	}
+	defer cleanup()
+
 	addr := listenAddr()
 	log.Printf("listening on %s", addr)
+
 	if err := http.ListenAndServe(addr, handler); err != nil {
+		return fmt.Errorf("serve HTTP: %w", err)
+	}
+
+	return nil
+}
+
+// main reports startup and server failures after run has released
+// any resources it initialized.
+func main() {
+	if err := run(); err != nil {
 		log.Fatal(err)
 	}
 }

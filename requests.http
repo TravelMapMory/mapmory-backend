@@ -1,5 +1,6 @@
 # Manual API requests for the VS Code REST Client extension.
-# Run the Go server first (see README.md).
+# Run the Go server first (see README.md). For /api/users/me, enable
+# PostgreSQL-backed resolution as described in docs/application-user-resolution.md.
 # Authentication examples use a real Firebase *user ID token*, not the
 # Google OAuth token returned by `gcloud auth application-default`.
 #
@@ -34,8 +35,25 @@ Authorization: Basic invalid-token
 GET {{baseUrl}}/api/auth/me
 Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 
-# WARNING: Trip endpoints are currently UNPROTECTED and use process-wide,
-# in-memory data. A successful auth/me call does not make trips owner-secured.
+### Application user — missing bearer token (401)
+# Requires MAPMORY_ENABLE_DB_USER_RESOLUTION=true in .env (or the process
+# environment) when starting the Go server.
+GET {{baseUrl}}/api/users/me
+
+### Application user — invalid bearer token (401)
+GET {{baseUrl}}/api/users/me
+Authorization: Bearer invalid-token
+
+### Application user — verified Firebase token (200)
+# Requires PostgreSQL, applied Goose migrations, and the enabled resolver.
+# First request creates the users row if absent; later requests return
+# the same internal UUID for the same Firebase UID.
+GET {{baseUrl}}/api/users/me
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+
+# WARNING: /api/users/me resolves a persistent application user, but trip
+# endpoints are still UNPROTECTED and use process-wide, in-memory storage.
+# Successful authentication does not imply trip ownership enforcement.
 
 ### List trips — currently public (200)
 GET {{baseUrl}}/api/trips
