@@ -20,6 +20,7 @@ type tripRepositoryFake struct {
 	create func(context.Context, uuid.UUID, string, string) (trips.Trip, error)
 	list   func(context.Context, uuid.UUID) ([]trips.Trip, error)
 	get    func(context.Context, uuid.UUID, uuid.UUID) (trips.Trip, error)
+	update func(context.Context, uuid.UUID, uuid.UUID, trips.UpdateFields) (trips.Trip, error)
 }
 
 func (f tripRepositoryFake) Create(ctx context.Context, owner uuid.UUID, title, notes string) (trips.Trip, error) {
@@ -39,6 +40,16 @@ func (f tripRepositoryFake) GetByID(ctx context.Context, owner, id uuid.UUID) (t
 		panic("unexpected GetByID")
 	}
 	return f.get(ctx, owner, id)
+}
+func (f tripRepositoryFake) Update(
+	ctx context.Context,
+	owner, id uuid.UUID,
+	fields trips.UpdateFields,
+) (trips.Trip, error) {
+	if f.update == nil {
+		panic("unexpected Update")
+	}
+	return f.update(ctx, owner, id, fields)
 }
 func persistentTestHandler(t *testing.T, owner uuid.UUID, repo trips.Repository) http.Handler {
 	t.Helper()

@@ -92,3 +92,40 @@ func (r *PostgresRepository) GetByID(ctx context.Context, ownerID, tripID uuid.U
 	}
 	return trip, nil
 }
+
+func (r *PostgresRepository) Update(
+	ctx context.Context,
+	ownerID, tripID uuid.UUID,
+	fields UpdateFields,
+) (Trip, error) {
+	const query = `
+        UPDATE trips
+        SET
+            title = COALESCE($3, title),
+            notes = COALESCE($4, notes)
+        WHERE id = $1 AND owner_id = $2
+        RETURNING id, owner_id, title, notes, created_at
+    `
+
+	var record Trip
+	err := r.db.QueryRowContext(
+		ctx, query,
+		tripID, ownerID,
+		fields.Title, fields.Notes,
+	).Scan(
+		&record.ID,
+		&record.OwnerID,
+		&record.Title,
+		&record.Notes,
+		&record.CreatedAt,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return Trip{}, ErrNotFound
+	}
+	if err != nil {
+		return Trip{}, fmt.Errorf("update trip: %w", err)
+	}
+
+	return record, nil
+}
