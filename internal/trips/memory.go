@@ -66,3 +66,35 @@ func (r *MemoryRepository) GetByID(ctx context.Context, ownerID, tripID uuid.UUI
 	}
 	return Trip{}, ErrNotFound
 }
+
+func (r *MemoryRepository) Update(
+	ctx context.Context,
+	ownerID, tripID uuid.UUID,
+	fields UpdateFields,
+) (Trip, error) {
+	if err := ctx.Err(); err != nil {
+		return Trip{}, err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.trips {
+		record := &r.trips[i]
+
+		if record.ID != tripID || record.OwnerID != ownerID {
+			continue
+		}
+
+		if fields.Title != nil {
+			record.Title = *fields.Title
+		}
+		if fields.Notes != nil {
+			record.Notes = *fields.Notes
+		}
+
+		return *record, nil
+	}
+
+	return Trip{}, ErrNotFound
+}
