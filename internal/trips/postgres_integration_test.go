@@ -334,3 +334,78 @@ func TestPostgresRepositoryPersistsAcrossPoolsIntegration(t *testing.T) {
 		t.Fatalf("trip changed across pools: got %+v, want %+v", got, created)
 	}
 }
+
+func TestPostgresRepositoryUpdateIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	alice := createIntegrationOwner(t, db)
+	bob := createIntegrationOwner(t, db)
+	ctx := integrationContext(t)
+	repo := NewPostgresRepository(db)
+	created, err := repo.Create(ctx, alice, "Original", "Original notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "Renamed"
+	renamed, err := repo.Update(ctx, alice, created.ID, UpdateFields{Title: &title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Title != title || renamed.Notes != created.Notes {
+		t.Fatalf("title-only update: %+v", renamed)
+	}
+	notes := "Changed notes"
+	changed, err := repo.Update(ctx, alice, created.ID, UpdateFields{Notes: &notes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Title != title || changed.Notes != notes {
+		t.Fatalf("notes-only update: %+v", changed)
+	}
+	empty := ""
+	cleared, err := repo.Update(ctx, alice, created.ID, UpdateFields{Notes: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Title != title || cleared.Notes != "" {
+		t.Fatalf("clear notes: %+v", cleared)
+	}
+	if cleared.ID != created.ID || cleared.OwnerID != created.OwnerID || !cleared.CreatedAt.Equal(created.CreatedAt) {
+		t.Fatalf("immutable fields changed: before=%+v after=%+v", created, cleared)
+	}
+	if _, err := repo.Update(ctx, bob, created.ID, UpdateFields{Title: &empty}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign update: %v", err)
+	}
+	if _, err := repo.Update(ctx, alice, uuid.New(), UpdateFields{Title: &empty}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown update: %v", err)
+	}
+	// Reading through a separate pool confirms persistence independently of
+	// the connection used for the update.
+	secondDB := openIntegrationDB(t)
+	got, err := NewPostgresRepository(secondDB).GetByID(ctx, alice, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != cleared.ID || got.OwnerID != cleared.OwnerID || got.Title != cleared.Title || got.Notes != cleared.Notes || !got.CreatedAt.Equal(cleared.CreatedAt) {
+		t.Fatalf("persisted record changed: %+v", got)
+	}
+}
+
+func TestPostgresRepositoryUpdateCancelledContextIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	owner := createIntegrationOwner(t, db)
+	repo := NewPostgresRepository(db)
+	created, err := repo.Create(integrationContext(t), owner, "Original", "Notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	title := "Changed"
+	if _, err := repo.Update(ctx, owner, created.ID, UpdateFields{Title: &title}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled update: %v", err)
+	}
+	got, err := repo.GetByID(integrationContext(t), owner, created.ID)
+	if err != nil || got.Title != created.Title {
+		t.Fatalf("cancelled update modified trip: %+v, %v", got, err)
+	}
+}
