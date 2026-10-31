@@ -16,7 +16,6 @@ import (
 	"github.com/TravelMapMory/mapmory-backend/internal/appuser"
 	"github.com/TravelMapMory/mapmory-backend/internal/auth"
 	"github.com/TravelMapMory/mapmory-backend/internal/postgres"
-	"github.com/TravelMapMory/mapmory-backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -298,9 +297,12 @@ func newConfiguredHandler(
 		)
 	}
 
-	repository := users.NewRepository(db)
+	dependencies := newDatabaseDependencies(db)
 
-	return newHandlerWithResolver(verifier, repository), func() {
+	// Persistent trip routes require both verified Firebase identity and
+	// resolved application-user identity. The legacy handler is used only
+	// when database-backed mode is disabled.
+	return newHandlerWithPersistentTrips(verifier, dependencies.users, dependencies.trips), func() {
 		_ = db.Close()
 	}, nil
 }

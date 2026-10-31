@@ -48,7 +48,8 @@ SQL migrations are stored in:
 ```text
 db/
 └── migrations/
-    └── 00001_create_users_and_trips.sql
+    ├── 00001_create_users_and_trips.sql
+    └── 00002_reject_whitespace_only_trip_titles.sql
 ```
 
 MapMory uses sequential migration numbers and Goose's SQL annotations.
@@ -58,7 +59,7 @@ The initial migration creates:
 - `users`: internal UUID, unique Firebase authentication subject, display name, and creation timestamp.
 - `trips`: internal UUID, owner foreign key, title, notes, and creation timestamp.
 
-It also creates an index supporting owner-scoped trip listing.
+It also creates an index supporting owner-scoped trip listing. Migration `00002` tightens the trip-title check to reject common ASCII whitespace-only values (including tabs and newlines); it does not cover every Unicode whitespace character. Go HTTP validation also trims and rejects blank titles.
 
 The `photos` and `upload_batches` tables are intentionally deferred.
 
@@ -131,7 +132,7 @@ On an explicitly disposable database only:
 goose -dir db/migrations postgres "$DATABASE_URL" down
 ```
 
-`down` reverts one applied migration. For the initial schema, that drops the `trips` and `users` tables, including their contents.
+`down` reverts one applied migration. For migration `00002`, one `down` restores the prior title constraint; another `down` would drop the tables from `00001`, including their contents. Never run this sequence against a shared database.
 
 Do not use `down`, `reset`, or `redo` as routine production recovery commands. Production schema changes require a deliberate migration and recovery plan.
 
@@ -208,13 +209,13 @@ The script:
 3. Applies the migrations.
 4. Executes `db/tests/schema_constraints.sql`.
 5. Repeats `goose up` to verify that no migrations remain pending.
-6. Rolls back the initial migration and checks that the application tables were removed.
-7. Reapplies the migration and reruns the SQL tests.
+6. Rolls back both migrations one at a time and checks that the application tables were removed.
+7. Reapplies both migrations and reruns the SQL tests.
 8. Removes the temporary container, including when a command fails.
 
 Unlike the standalone SQL test, the lifecycle script creates and manages its own database. It does not use the caller's `DATABASE_URL`, so it cannot accidentally roll back the normal local development database through that variable.
 
-The lifecycle script currently assumes a single initial migration. Its rollback assertions must be revisited when additional migrations are introduced.
+The lifecycle script currently exercises both migrations explicitly. When adding a further migration, update its rollback sequence and assertions.
 
 ### CI
 
@@ -244,4 +245,4 @@ This database foundation supports:
 - **Backend #17:** Persisting trips using PostgreSQL.
 - **Backend #9:** Enforcing owner-only access to trips.
 
-User resolution now exists separately under backend #32. Ownership enforcement, photo/upload schema, Cloud SQL provisioning, and production migration execution remain separate work.
+User resolution now exists separately under backend #32. Owner-scoped trip operations and HTTP integration tests are implemented on the trip-persistence branch. Photo/upload schema, Cloud SQL provisioning, and production migration execution remain separate work.
