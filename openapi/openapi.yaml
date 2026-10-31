@@ -1,33 +1,33 @@
 openapi: 3.1.0
 info:
   title: MapMory — minimal private-flow draft
-  version: 0.0.5
-  description: 'PROPOSED, pending team review. The authenticated create/list/get trip flow is implemented in database mode, but cursor pagination and the photo APIs remain proposed. Covers owned trips and batch-shaped
-    photo upload. This is a discussion draft, not a production-ready contract. All
-    routes require a Firebase ID token; local user resolution happens on authenticated
-    requests. Map, geocoding, sharing, edits/deletion, retry routes and URL renewal
-    for upload are not defined here.
+  version: 0.0.6
+  description: |-
+    PROPOSED, pending team review. Version 0.0.6 documents authenticated,
+    owner-scoped create/list/get/update trip operations implemented in PostgreSQL
+    database mode. The legacy in-memory mode does not implement this full contract.
 
+    Cursor-based trip pagination, photo listing, and batch upload APIs remain
+    proposals, not implemented endpoints. Map, geocoding, sharing, deletion,
+    retry routes, and upload URL renewal are outside this draft.
+
+    Implemented private trip routes require a Firebase ID token; the backend
+    resolves the application-user identity and enforces ownership.
 
     Open questions:
-
-    - How is POST /trips/{trip_id}/batches made safe to retry after a lost response:
-    Idempotency-Key or a client-generated batch ID?
-
-    - Does the server need an uploading state, and if so how does it learn that the
-    direct GCS upload started?
-
-    - How are interrupted processing, failed-photo retries and expired upload URLs
-    recovered?
-
-    - Confirm pagination, field names, input limits, status codes and photo-list ordering
-    with the UI.'
+    - How should batch registration recover from a lost response: an
+      Idempotency-Key or client-generated batch ID?
+    - Is a persistent uploading state needed, and how is upload start detected?
+    - How should interrupted processing, failed-photo retries, and expired
+      upload URLs be recovered?
+    - Confirm proposed pagination, photo fields, input limits, error codes,
+      and photo-list ordering with the UI.
   contact:
     name: MapMory team
     url: https://github.com/TravelMapMory
 servers:
 - url: http://localhost:8080/api
-  description: Proposed local API URL
+  description: Local development API URL
 security:
 - firebaseBearer: []
 paths:
@@ -76,8 +76,12 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateTrip'
-      description: Ownership comes from the verified identity. Initial cover is null
-        and photo_count is zero.
+      description: >-
+        Implemented in database mode. Ownership comes from the verified identity.
+        Title and notes are trimmed, with the same length limits used by PATCH:
+        title is required, nonblank and at most 120 Unicode code points; notes
+        are optional and at most 2,000 Unicode code points. Explicit null is
+        invalid for either field. Initial cover is null and photo_count is zero.
       responses:
         '201':
           description: Create a private trip
@@ -125,6 +129,49 @@ paths:
       - Trips
       description: Return an owned trip, including its photo count and optional cover.
         Return 404 if the trip is absent or belongs to another user.
+    patch:
+      operationId: updateTrip
+      summary: Update an owned trip's title or private notes
+      description: >-
+        Implemented in database mode. Supply at least one field; omitted fields
+        are unchanged. Supplied strings are trimmed, and an empty notes string
+        clears the notes. The owner is resolved from the verified Firebase identity,
+        never from the request body. Missing, malformed, and foreign trip IDs
+        return the same 404 response. The legacy in-memory mode does not implement PATCH.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTrip'
+            examples:
+              rename:
+                summary: Rename without changing notes
+                value:
+                  title: Japan 2026
+              clearNotes:
+                summary: Clear notes without changing title
+                value:
+                  notes: ''
+      responses:
+        '200':
+          description: Updated owned trip
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '503':
+          $ref: '#/components/responses/503'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Trips
   /trips/{trip_id}/photos:
     parameters:
     - name: trip_id
@@ -348,8 +395,30 @@ components:
         notes:
           type: string
           default: ''
+          maxLength: 2000
+          description: Optional; defaults to an empty string. Trim surrounding whitespace.
       additionalProperties: false
       title: CreateTrip
+    UpdateTrip:
+      type: object
+      minProperties: 1
+      maxProperties: 2
+      additionalProperties: false
+      description: >-
+        Partial update. Both fields are optional but at least one must be present.
+        Only JSON strings are accepted; null is invalid. String limits are counted
+        in Unicode code points after trimming surrounding whitespace.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Trim surrounding whitespace; reject blank titles.
+        notes:
+          type: string
+          maxLength: 2000
+          description: Trim surrounding whitespace; empty string clears notes.
+      title: UpdateTrip
     Trip:
       type: object
       required:
