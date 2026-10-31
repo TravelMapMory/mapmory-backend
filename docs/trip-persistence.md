@@ -1,6 +1,6 @@
 # Authenticated trip persistence
 
-Trip persistence is implemented when the backend starts with **`MAPMORY_ENABLE_DB_USER_RESOLUTION=true`** and a reachable migrated PostgreSQL database. In that mode the three trip routes are authenticated, owner-scoped, and persistent. When the flag is **false**, the legacy trip prototype is public, shared in process memory, and discarded on restart. Never use the legacy mode to hold private travel information.
+Trip persistence is implemented when the backend starts with **`MAPMORY_ENABLE_DB_USER_RESOLUTION=true`** and a reachable migrated PostgreSQL database. In that mode the four trip operations (list, create, get, and update) are authenticated, owner-scoped, and persistent. When the flag is **false**, the legacy trip prototype is public, shared in process memory, and discarded on restart. Never use the legacy mode to hold private travel information.
 
 ## Request and ownership model
 
@@ -10,7 +10,7 @@ Firebase ID token → auth.RequireIdentity → verified Firebase UID
  → persistent trip handlers → trips.Repository → PostgreSQL trips.owner_id
 ```
 
-The server obtains `owner_id` exclusively from verified request context. The client cannot specify or change an owner; unknown JSON request fields are rejected. The trip repository scopes `ListByOwner` and `GetByID` queries by `owner_id`. Both nonexistent and foreign trips return the same JSON `404`. `GET /healthz` is public; `GET /api/auth/me` verifies Firebase but does not need PostgreSQL; `/api/users/me` and persistent trip routes require user resolution.
+The server obtains `owner_id` exclusively from verified request context. The client cannot specify or change an owner; unknown JSON request fields are rejected. The trip repository scopes `ListByOwner`, `GetByID`, and `Update` queries by `owner_id`. Both nonexistent and foreign trips return the same JSON `404`. `GET /healthz` is public; `GET /api/auth/me` verifies Firebase but does not need PostgreSQL; `/api/users/me` and persistent trip routes require user resolution.
 
 ## Supported endpoints (database mode)
 
@@ -19,8 +19,17 @@ The server obtains `owner_id` exclusively from verified request context. The cli
 | `GET /api/trips` | `200` `{ "items": [...], "next_cursor": null }`; newest first; currently **no pagination** |
 | `POST /api/trips` | `201` with new trip; JSON object with required `title` and optional `notes` |
 | `GET /api/trips/{trip_id}` | `200` for an owned trip; `404` for unknown, malformed, or another user's ID |
+| `PATCH /api/trips/{trip_id}` | `200` with the updated owned trip; `404` for unknown, malformed, or foreign IDs |
 
-Trip responses contain `id`, `title`, `notes`, `created_at`, `photo_count: 0` and `cover: null`. The owner UUID is not returned. The HTTP layer trims titles and rejects empty titles or those exceeding 120 Unicode code points. An unknown field, extra JSON value, or invalid body returns JSON `400` (`invalid_request`). Missing/invalid Firebase credentials return JSON `401` (`unauthorized`); application-user resolution failure returns `503` (`user_resolution_unavailable`); unexpected trip-storage failures return JSON `500` (`internal_error`) without database internals. Unsupported paths/methods may return the default plain-text `404`/`405` from Go's router. `HEAD` is matched by `GET` route patterns in Go's ServeMux.
+Trip responses contain `id`, `title`, `notes`, `created_at`, `photo_count: 0` and `cover: null`. The owner UUID is not returned. Both create and update trim title and notes. Titles must be nonblank and at most 120 Unicode code points; notes are limited to 2,000 Unicode code points. Explicit JSON `null` is rejected for either field. An unknown field, extra JSON value, or invalid body returns JSON `400` (`invalid_request`). Missing/invalid Firebase credentials return JSON `401` (`unauthorized`); application-user resolution failure returns `503` (`user_resolution_unavailable`); unexpected trip-storage failures return JSON `500` (`internal_error`) without database internals. Unsupported paths/methods may return the default plain-text `404`/`405` from Go's router. `HEAD` is matched by `GET` route patterns in Go's ServeMux.
+
+### Partial trip updates
+
+`PATCH /api/trips/{trip_id}` accepts a JSON object containing `title`, `notes`, or both. At least one field is required; omitted fields retain their existing values. Supplied values must be strings (not `null`) and are trimmed before storage. Titles must remain nonblank and contain at most 120 Unicode code points; notes may contain at most 2,000 Unicode code points. Sending `"notes": ""` clears the notes. Empty objects, unknown fields (including `owner_id`), malformed JSON, additional JSON values, and invalid types or lengths return `400 invalid_request`.
+
+The repository applies changes in a single owner-scoped PostgreSQL `UPDATE`, preserving the trip ID, owner, and creation timestamp. Both missing and foreign trips return `404 not_found`; the client cannot change trip ownership. The operation returns the updated trip using the same shape as GET. PATCH is supported only in the authenticated database mode, not the legacy in-memory prototype.
+
+For interactive examples, see the PATCH requests in [requests.http](../requests.http). The OpenAPI draft specifies this operation while retaining proposed status for unrelated photo and upload routes.
 
 Creation is **not idempotent**: repeating `POST` may create another trip. Do not retry a write automatically after an uncertain network failure. Trip cover/photo counts are placeholders until the photo API is integrated. The OpenAPI draft also describes proposed trip cursor pagination and future photo/upload operations not implemented here.
 
@@ -31,7 +40,7 @@ Creation is **not idempotent**: repeating `POST` may create another trip. Do not
 3. Install Goose v3.29.0 and apply **both** migrations: `goose -dir db/migrations postgres "$DATABASE_URL" up` (the Goose CLI does not load `.env` automatically).
 4. Run `go run ./cmd/server`. A missing or unreachable database prevents startup in database mode; there is no silent memory fallback.
 5. Refresh a disposable account's token with `scripts/firebase-id-token.sh` and exercise authenticated requests in [requests.http](../requests.http).
-6. Create a trip, restart the server, and retrieve the same ID. With another test account, verify that the first user's trip is not listed and returns `404` on detail lookup.
+6. Create a trip, update its title or notes, restart the server, and retrieve the same ID to confirm persistence. With another test account, verify that the first user's trip is neither listed nor retrievable and that an attempted PATCH returns `404` without changing its values.
 
 Note: running `./scripts/test-postgres-integration.sh` creates a disposable test database which is removed after the run. It is not the local persistent development database.
 
@@ -48,7 +57,7 @@ go build './...'
 ./scripts/test-postgres-integration.sh
 ```
 
-The default Go suite uses fakes and needs no database. The PostgreSQL integration harness provisions isolated PostgreSQL 17, applies migrations and runs repository and HTTP integration tests with the race detector. HTTP integration tests use synthetic verified Firebase identities but real user resolution, trip repositories and SQL. They cover cross-user isolation and persistence through a fresh database pool; they do not test the Firebase Admin SDK or production deployment.
+The default Go suite uses fakes and needs no database. The PostgreSQL integration harness provisions isolated PostgreSQL 17, applies migrations and runs repository and HTTP integration tests with the race detector. HTTP integration tests use synthetic verified Firebase identities but real user resolution, trip repositories and SQL. They cover cross-user isolation, partial updates, input validation, and persistence through a fresh database pool; they do not test the Firebase Admin SDK or production deployment.
 
 ## Deployment limitations
 

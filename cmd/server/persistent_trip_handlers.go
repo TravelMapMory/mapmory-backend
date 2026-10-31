@@ -52,35 +52,84 @@ func (h *persistentTripHandlers) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tripPage{Items: items, NextCursor: nil})
 }
 
+// normalizeTripTitle and normalizeTripNotes enforce the same rules for
+// creation and partial updates. Lengths are measured after trimming.
+func normalizeTripTitle(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", "title must not be blank"
+	}
+	if utf8.RuneCountInString(value) > 120 {
+		return "", "title must be at most 120 characters"
+	}
+	return value, ""
+}
+
+func normalizeTripNotes(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	if utf8.RuneCountInString(value) > 2000 {
+		return "", "notes must be at most 2000 characters"
+	}
+	return value, ""
+}
+
 func (h *persistentTripHandlers) create(w http.ResponseWriter, r *http.Request) {
 	owner, ok := tripOwner(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-	var input createTripRequest
+	// Decode field-by-field to reject JSON null and unknown properties,
+	// consistent with PATCH rather than silently treating null as missing.
+	var raw map[string]json.RawMessage
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
+	if err := decoder.Decode(&raw); err != nil || raw == nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-	// Require one JSON value: a valid first object followed by arbitrary data is not valid.
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-	input.Title = strings.TrimSpace(input.Title)
-	if input.Title == "" {
+	var title, notes string
+	hasTitle := false
+	for key, value := range raw {
+		if string(value) == "null" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "fields must not be null")
+			return
+		}
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "fields must be strings")
+			return
+		}
+		switch key {
+		case "title":
+			hasTitle = true
+			var message string
+			title, message = normalizeTripTitle(text)
+			if message != "" {
+				writeError(w, http.StatusBadRequest, "invalid_request", message)
+				return
+			}
+		case "notes":
+			var message string
+			notes, message = normalizeTripNotes(text)
+			if message != "" {
+				writeError(w, http.StatusBadRequest, "invalid_request", message)
+				return
+			}
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_request", "unknown field")
+			return
+		}
+	}
+	if !hasTitle {
 		writeError(w, http.StatusBadRequest, "invalid_request", "title must not be blank")
 		return
 	}
-	if utf8.RuneCountInString(input.Title) > 120 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "title must be at most 120 characters")
-		return
-	}
-	record, err := h.repository.Create(r.Context(), owner, input.Title, input.Notes)
+	record, err := h.repository.Create(r.Context(), owner, title, notes)
 	if err != nil {
 		tripStorageError(w, err)
 		return
@@ -111,81 +160,64 @@ func (h *persistentTripHandlers) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tripResponse(record))
 }
 
+// update applies partial changes only to a trip owned by the resolved user.
 func (h *persistentTripHandlers) update(w http.ResponseWriter, r *http.Request) {
 	owner, ok := tripOwner(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-
 	id, err := uuid.Parse(r.PathValue("trip_id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "trip not found")
 		return
 	}
-
-	// Decode individual fields to distinguish omission from explicit null.
 	var raw map[string]json.RawMessage
 	decoder := json.NewDecoder(r.Body)
-
 	if err := decoder.Decode(&raw); err != nil || raw == nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-
-	// Reject additional JSON values after the request object.
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
-
 	if len(raw) == 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "at least one field is required")
 		return
 	}
-
 	var fields trips.UpdateFields
-
 	for key, value := range raw {
 		if string(value) == "null" {
 			writeError(w, http.StatusBadRequest, "invalid_request", "fields must not be null")
 			return
 		}
-
 		var text string
 		if err := json.Unmarshal(value, &text); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", "fields must be strings")
 			return
 		}
-
-		text = strings.TrimSpace(text)
-
 		switch key {
 		case "title":
-			if text == "" {
-				writeError(w, http.StatusBadRequest, "invalid_request", "title must not be blank")
+			normalized, message := normalizeTripTitle(text)
+			if message != "" {
+				writeError(w, http.StatusBadRequest, "invalid_request", message)
 				return
 			}
-			if utf8.RuneCountInString(text) > 120 {
-				writeError(w, http.StatusBadRequest, "invalid_request", "title must be at most 120 characters")
-				return
-			}
-			fields.Title = &text
-
+			fields.Title = &normalized
 		case "notes":
-			if utf8.RuneCountInString(text) > 2000 {
-				writeError(w, http.StatusBadRequest, "invalid_request", "notes must be at most 2000 characters")
+			normalized, message := normalizeTripNotes(text)
+			if message != "" {
+				writeError(w, http.StatusBadRequest, "invalid_request", message)
 				return
 			}
-			fields.Notes = &text
-
+			fields.Notes = &normalized
 		default:
 			writeError(w, http.StatusBadRequest, "invalid_request", "unknown field")
 			return
 		}
 	}
-
 	record, err := h.repository.Update(r.Context(), owner, id, fields)
 	if errors.Is(err, trips.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "trip not found")
@@ -195,7 +227,6 @@ func (h *persistentTripHandlers) update(w http.ResponseWriter, r *http.Request) 
 		tripStorageError(w, err)
 		return
 	}
-
 	writeJSON(w, http.StatusOK, tripResponse(record))
 }
 

@@ -86,6 +86,43 @@ Content-Type: application/json
 GET {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}
 Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 
+### Rename the trip created above — authenticated (200)
+# Run "Create my trip" first. Only the title changes; notes are preserved.
+PATCH {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+Content-Type: application/json
+
+{
+  "title": "Japan 2026 — updated"
+}
+
+### Clear the created trip's notes — authenticated (200)
+# Empty notes clear the stored value; the title remains unchanged.
+PATCH {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+Content-Type: application/json
+
+{
+  "notes": ""
+}
+
+### Invalid trip update — blank title (400)
+PATCH {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+Content-Type: application/json
+
+{
+  "title": "   "
+}
+
+### Update trip — missing bearer token (401 in database mode)
+PATCH {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}
+Content-Type: application/json
+
+{
+  "title": "Should not change"
+}
+
 ### Missing trip — authenticated (404)
 GET {{baseUrl}}/api/trips/00000000-0000-4000-8000-000000000000
 Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}

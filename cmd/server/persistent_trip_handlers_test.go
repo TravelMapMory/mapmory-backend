@@ -41,11 +41,7 @@ func (f tripRepositoryFake) GetByID(ctx context.Context, owner, id uuid.UUID) (t
 	}
 	return f.get(ctx, owner, id)
 }
-func (f tripRepositoryFake) Update(
-	ctx context.Context,
-	owner, id uuid.UUID,
-	fields trips.UpdateFields,
-) (trips.Trip, error) {
+func (f tripRepositoryFake) Update(ctx context.Context, owner, id uuid.UUID, fields trips.UpdateFields) (trips.Trip, error) {
 	if f.update == nil {
 		panic("unexpected Update")
 	}
@@ -125,6 +121,41 @@ func TestPersistentTripCreateUsesResolvedOwner(t *testing.T) {
 		t.Fatalf("unexpected response: %v", got)
 	}
 }
+func TestPersistentTripCreateNormalizesNotes(t *testing.T) {
+	owner := uuid.New()
+	calls := 0
+	repo := tripRepositoryFake{create: func(_ context.Context, gotOwner uuid.UUID, title, notes string) (trips.Trip, error) {
+		calls++
+		if gotOwner != owner || title != "Japan" || notes != "memo" {
+			t.Fatalf("got owner=%s title=%q notes=%q", gotOwner, title, notes)
+		}
+		return trips.Trip{ID: uuid.New(), OwnerID: owner, Title: title, Notes: notes, CreatedAt: time.Now()}, nil
+	}}
+	rec := tripRequest(persistentTestHandler(t, owner, repo), "POST", "/api/trips", `{"title":" Japan ","notes":"  memo  "}`, "Bearer valid")
+	if rec.Code != 201 || calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", rec.Code, calls, rec.Body.String())
+	}
+}
+
+func TestPersistentTripCreateRejectsInvalidNotes(t *testing.T) {
+	h := persistentTestHandler(t, uuid.New(), tripRepositoryFake{})
+	cases := []struct{ name, body string }{
+		{"overlong notes", `{"title":"Japan","notes":"` + strings.Repeat("a", 2001) + `"}`},
+		{"null notes", `{"title":"Japan","notes":null}`},
+		{"null title", `{"title":null}`},
+		{"non-string notes", `{"title":"Japan","notes":3}`},
+		{"non-object", `[]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tripRequest(h, "POST", "/api/trips", tc.body, "Bearer valid")
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestPersistentTripListAndGet(t *testing.T) {
 	owner, tripID := uuid.New(), uuid.New()
 	record := trips.Trip{ID: tripID, OwnerID: owner, Title: "Japan", CreatedAt: time.Now().UTC()}
