@@ -111,6 +111,94 @@ func (h *persistentTripHandlers) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tripResponse(record))
 }
 
+func (h *persistentTripHandlers) update(w http.ResponseWriter, r *http.Request) {
+	owner, ok := tripOwner(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+
+	id, err := uuid.Parse(r.PathValue("trip_id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "trip not found")
+		return
+	}
+
+	// Decode individual fields to distinguish omission from explicit null.
+	var raw map[string]json.RawMessage
+	decoder := json.NewDecoder(r.Body)
+
+	if err := decoder.Decode(&raw); err != nil || raw == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	// Reject additional JSON values after the request object.
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+
+	if len(raw) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "at least one field is required")
+		return
+	}
+
+	var fields trips.UpdateFields
+
+	for key, value := range raw {
+		if string(value) == "null" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "fields must not be null")
+			return
+		}
+
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "fields must be strings")
+			return
+		}
+
+		text = strings.TrimSpace(text)
+
+		switch key {
+		case "title":
+			if text == "" {
+				writeError(w, http.StatusBadRequest, "invalid_request", "title must not be blank")
+				return
+			}
+			if utf8.RuneCountInString(text) > 120 {
+				writeError(w, http.StatusBadRequest, "invalid_request", "title must be at most 120 characters")
+				return
+			}
+			fields.Title = &text
+
+		case "notes":
+			if utf8.RuneCountInString(text) > 2000 {
+				writeError(w, http.StatusBadRequest, "invalid_request", "notes must be at most 2000 characters")
+				return
+			}
+			fields.Notes = &text
+
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_request", "unknown field")
+			return
+		}
+	}
+
+	record, err := h.repository.Update(r.Context(), owner, id, fields)
+	if errors.Is(err, trips.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "trip not found")
+		return
+	}
+	if err != nil {
+		tripStorageError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, tripResponse(record))
+}
+
 // newHandlerWithPersistentTrips registers only database-backed routes in
 // database mode. In particular, no legacy in-memory trip router is mounted:
 // unsupported methods and alternate paths cannot reach prototype storage.
@@ -128,5 +216,6 @@ func newHandlerWithPersistentTrips(verifier auth.Verifier, resolver appuser.Reso
 	mux.Handle("GET /api/trips", protected(handlers.list))
 	mux.Handle("POST /api/trips", protected(handlers.create))
 	mux.Handle("GET /api/trips/{trip_id}", protected(handlers.get))
+	mux.Handle("PATCH /api/trips/{trip_id}", protected(handlers.update))
 	return mux
 }

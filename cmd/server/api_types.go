@@ -31,6 +31,11 @@ type createTripRequest struct {
 	Notes string `json:"notes"`
 }
 
+type updateTripRequest struct {
+	Title *string `json:"title"`
+	Notes *string `json:"notes"`
+}
+
 type healthResponse struct {
 	Status string `json:"status"`
 }
