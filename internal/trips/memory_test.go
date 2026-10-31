@@ -108,3 +108,69 @@ func TestMemoryRepositoryConcurrentCreate(t *testing.T) {
 		t.Fatalf("got %d trips, error %v; want %d", len(got), err, count)
 	}
 }
+
+func TestMemoryRepositoryUpdate(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	alice, bob := uuid.New(), uuid.New()
+	created, err := repo.Create(ctx, alice, "Original", "Original notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "Renamed"
+	renamed, err := repo.Update(ctx, alice, created.ID, UpdateFields{Title: &title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Title != title || renamed.Notes != created.Notes {
+		t.Fatalf("title-only update: %+v", renamed)
+	}
+	notes := "New notes"
+	updated, err := repo.Update(ctx, alice, created.ID, UpdateFields{Notes: &notes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != title || updated.Notes != notes {
+		t.Fatalf("notes-only update: %+v", updated)
+	}
+	empty := ""
+	cleared, err := repo.Update(ctx, alice, created.ID, UpdateFields{Notes: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Title != title || cleared.Notes != "" {
+		t.Fatalf("clear notes: %+v", cleared)
+	}
+	if cleared.ID != created.ID || cleared.OwnerID != created.OwnerID || !cleared.CreatedAt.Equal(created.CreatedAt) {
+		t.Fatalf("immutable fields changed: before=%+v after=%+v", created, cleared)
+	}
+	if _, err := repo.Update(ctx, bob, created.ID, UpdateFields{Title: &empty}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign update: %v", err)
+	}
+	if _, err := repo.Update(ctx, alice, uuid.New(), UpdateFields{Title: &empty}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown update: %v", err)
+	}
+	persisted, err := repo.GetByID(ctx, alice, created.ID)
+	if err != nil || persisted != cleared {
+		t.Fatalf("foreign update changed record: %+v, %v", persisted, err)
+	}
+}
+
+func TestMemoryRepositoryUpdateCancelledContext(t *testing.T) {
+	repo := NewMemoryRepository()
+	owner := uuid.New()
+	created, err := repo.Create(context.Background(), owner, "Original", "Notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	title := "Changed"
+	if _, err := repo.Update(ctx, owner, created.ID, UpdateFields{Title: &title}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("update cancelled: %v", err)
+	}
+	got, err := repo.GetByID(context.Background(), owner, created.ID)
+	if err != nil || got != created {
+		t.Fatalf("cancelled update changed record: %+v, %v", got, err)
+	}
+}

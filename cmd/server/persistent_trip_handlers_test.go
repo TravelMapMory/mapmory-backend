@@ -200,3 +200,121 @@ func TestPersistentTripListEmpty(t *testing.T) {
 		t.Fatalf("response=%d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestPersistentTripUpdateUsesResolvedOwner(t *testing.T) {
+	owner, id := uuid.New(), uuid.New()
+	initial := trips.Trip{ID: id, OwnerID: owner, Title: "Original", Notes: "Original notes", CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+	for _, tc := range []struct {
+		name, body           string
+		wantTitle, wantNotes *string
+	}{
+		{"title only", `{"title":"  Renamed  "}`, stringPtr("Renamed"), nil},
+		{"notes only", `{"notes":"  Changed  "}`, nil, stringPtr("Changed")},
+		{"clear notes", `{"notes":""}`, nil, stringPtr("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			repo := tripRepositoryFake{update: func(_ context.Context, gotOwner, gotID uuid.UUID, fields trips.UpdateFields) (trips.Trip, error) {
+				calls++
+				if gotOwner != owner || gotID != id {
+					t.Fatalf("wrong owner/trip: %s/%s", gotOwner, gotID)
+				}
+				if !sameOptionalString(fields.Title, tc.wantTitle) || !sameOptionalString(fields.Notes, tc.wantNotes) {
+					t.Fatalf("unexpected fields: %+v", fields)
+				}
+				record := initial
+				if fields.Title != nil {
+					record.Title = *fields.Title
+				}
+				if fields.Notes != nil {
+					record.Notes = *fields.Notes
+				}
+				return record, nil
+			}}
+			h := persistentTestHandler(t, owner, repo)
+			rec := tripRequest(h, "PATCH", "/api/trips/"+id.String(), tc.body, "Bearer valid")
+			if rec.Code != http.StatusOK || calls != 1 {
+				t.Fatalf("status=%d calls=%d body=%s", rec.Code, calls, rec.Body.String())
+			}
+			var got trip
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.ID != id.String() || !got.CreatedAt.Equal(initial.CreatedAt) || got.PhotoCount != 0 || got.Cover != nil {
+				t.Fatalf("unexpected trip response: %+v", got)
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string { return &s }
+func sameOptionalString(got, want *string) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	return *got == *want
+}
+
+func TestPersistentTripUpdateRejectsInvalidInput(t *testing.T) {
+	owner, id := uuid.New(), uuid.New()
+	h := persistentTestHandler(t, owner, tripRepositoryFake{}) // Any Update invocation must panic.
+	for _, tc := range []struct{ name, body string }{
+		{"empty object", `{}`},
+		{"empty array", `[]`},
+		{"null object", `null`},
+		{"blank title", `{"title":"  "}`},
+		{"long title", `{"title":"` + strings.Repeat("a", 121) + `"}`},
+		{"long notes", `{"notes":"` + strings.Repeat("a", 2001) + `"}`},
+		{"null title", `{"title":null}`},
+		{"null notes", `{"notes":null}`},
+		{"wrong type", `{"notes":42}`},
+		{"unknown field", `{"visibility":"public"}`},
+		{"owner injection", `{"owner_id":"` + uuid.NewString() + `"}`},
+		{"malformed", `{"title":`},
+		{"multiple values", `{"title":"A"}{"title":"B"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tripRequest(h, "PATCH", "/api/trips/"+id.String(), tc.body, "Bearer valid")
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
+				t.Fatalf("response=%d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestPersistentTripUpdateAuthenticationAndErrors(t *testing.T) {
+	owner, id := uuid.New(), uuid.New()
+	h := persistentTestHandler(t, owner, tripRepositoryFake{})
+	for _, header := range []string{"", "Bearer invalid"} {
+		rec := tripRequest(h, "PATCH", "/api/trips/"+id.String(), `{"title":"Changed"}`, header)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("auth status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	rec := tripRequest(h, "PATCH", "/api/trips/not-a-uuid", `{"title":"Changed"}`, "Bearer valid")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("invalid ID status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"foreign or missing", trips.ErrNotFound, http.StatusNotFound, "not_found"},
+		{"storage error", errors.New("secret sql detail"), http.StatusInternalServerError, "internal_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := tripRepositoryFake{update: func(context.Context, uuid.UUID, uuid.UUID, trips.UpdateFields) (trips.Trip, error) {
+				return trips.Trip{}, tc.err
+			}}
+			rec := tripRequest(persistentTestHandler(t, owner, repo), "PATCH", "/api/trips/"+id.String(), `{"title":"Changed"}`, "Bearer valid")
+			if rec.Code != tc.status || !strings.Contains(rec.Body.String(), `"code":"`+tc.code+`"`) {
+				t.Fatalf("response=%d %s", rec.Code, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "secret sql detail") {
+				t.Fatal("database error leaked")
+			}
+		})
+	}
+}
