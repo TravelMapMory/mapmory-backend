@@ -104,6 +104,9 @@ run_constraints
 log "Checking repeated migration application"
 migrate up
 
+log "Rolling back photo processing migration (00004)"
+migrate down
+
 log "Rolling back upload migration (00003)"
 migrate down
 

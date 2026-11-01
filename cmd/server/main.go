@@ -304,14 +304,14 @@ func newConfiguredHandler(
 	var uploadRoutes *uploadHandlers
 	cleanup := func() { _ = db.Close() }
 	if bucket := strings.TrimSpace(os.Getenv("MAPMORY_PHOTO_BUCKET")); bucket != "" {
-		signer, err := photostorage.NewGCS(ctx, bucket, strings.TrimSpace(os.Getenv("MAPMORY_UPLOAD_SIGNER")))
+		store, err := photostorage.NewGCS(ctx, bucket, strings.TrimSpace(os.Getenv("MAPMORY_UPLOAD_SIGNER")))
 		if err != nil {
 			_ = db.Close()
 			return nil, nil, fmt.Errorf("initialize photo uploads: %w", err)
 		}
-		uploadRoutes = &uploadHandlers{trips: dependencies.trips, batches: dependencies.uploads, signer: signer}
+		uploadRoutes = newUploadHandlers(dependencies.trips, dependencies.uploads, dependencies.photos, store)
 		cleanup = func() {
-			_ = signer.Close()
+			_ = store.Close()
 			_ = db.Close()
 		}
 	} else {

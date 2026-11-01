@@ -199,6 +199,64 @@ BEGIN
         WHEN check_violation THEN NULL;
     END;
 
+    -- A failed photo must carry an error code, and only a failed one may.
+    BEGIN
+        UPDATE photos SET state = 'failed' WHERE client_file_id = 'file-1';
+
+        RAISE EXCEPTION 'Failed photo without error_code was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    BEGIN
+        UPDATE photos SET error_code = 'invalid_image' WHERE client_file_id = 'file-1';
+
+        RAISE EXCEPTION 'Pending photo with error_code was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    -- A processed photo must have a display image.
+    BEGIN
+        UPDATE photos SET state = 'ready' WHERE client_file_id = 'file-1';
+
+        RAISE EXCEPTION 'Ready photo without display image was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    -- Coordinates are set in pairs and within range.
+    BEGIN
+        UPDATE photos SET exif_lat = 60.0 WHERE client_file_id = 'file-1';
+
+        RAISE EXCEPTION 'Unpaired EXIF coordinate was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    BEGIN
+        UPDATE photos SET lat = 91, lng = 0 WHERE client_file_id = 'file-1';
+
+        RAISE EXCEPTION 'Out-of-range latitude was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    BEGIN
+        UPDATE photos SET capture_utc_offset = '3:00' WHERE client_file_id = 'file-1';
+
+        RAISE EXCEPTION 'Malformed UTC offset was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    -- A complete processed row is accepted.
+    UPDATE photos SET
+        state = 'ready', display_object_name = 'display/test/1.jpg',
+        capture_time_local = '2025-07-14T09:30:00', capture_utc_offset = '+03:00',
+        exif_lat = 60.18, exif_lng = 24.82, lat = 60.18, lng = 24.82
+    WHERE client_file_id = 'file-1';
+
     -- Prevent deleting a trip that still has photos.
     BEGIN
         DELETE FROM trips WHERE id = trip_id;
