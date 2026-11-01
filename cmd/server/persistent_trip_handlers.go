@@ -234,6 +234,12 @@ func (h *persistentTripHandlers) update(w http.ResponseWriter, r *http.Request) 
 // database mode. In particular, no legacy in-memory trip router is mounted:
 // unsupported methods and alternate paths cannot reach prototype storage.
 func newHandlerWithPersistentTrips(verifier auth.Verifier, resolver appuser.Resolver, repository trips.Repository) http.Handler {
+	return newPersistentHandler(verifier, resolver, repository, nil)
+}
+
+// newPersistentHandler also registers upload routes when uploads is non-nil,
+// that is, when a photo bucket is configured.
+func newPersistentHandler(verifier auth.Verifier, resolver appuser.Resolver, repository trips.Repository, uploads *uploadHandlers) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler)
 	mux.Handle("GET /api/auth/me", auth.RequireIdentity(verifier, http.HandlerFunc(authMeHandler)))
@@ -248,5 +254,8 @@ func newHandlerWithPersistentTrips(verifier auth.Verifier, resolver appuser.Reso
 	mux.Handle("POST /api/trips", protected(handlers.create))
 	mux.Handle("GET /api/trips/{trip_id}", protected(handlers.get))
 	mux.Handle("PATCH /api/trips/{trip_id}", protected(handlers.update))
+	if uploads != nil {
+		mux.Handle("POST /api/trips/{trip_id}/batches", protected(uploads.registerBatch))
+	}
 	return mux
 }

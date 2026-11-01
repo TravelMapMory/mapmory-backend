@@ -15,6 +15,7 @@ import (
 
 	"github.com/TravelMapMory/mapmory-backend/internal/appuser"
 	"github.com/TravelMapMory/mapmory-backend/internal/auth"
+	"github.com/TravelMapMory/mapmory-backend/internal/photostorage"
 	"github.com/TravelMapMory/mapmory-backend/internal/postgres"
 	"github.com/google/uuid"
 )
@@ -299,12 +300,28 @@ func newConfiguredHandler(
 
 	dependencies := newDatabaseDependencies(db)
 
+	// Uploads are optional so that database mode keeps working without a bucket.
+	var uploadRoutes *uploadHandlers
+	cleanup := func() { _ = db.Close() }
+	if bucket := strings.TrimSpace(os.Getenv("MAPMORY_PHOTO_BUCKET")); bucket != "" {
+		signer, err := photostorage.NewGCS(ctx, bucket, strings.TrimSpace(os.Getenv("MAPMORY_UPLOAD_SIGNER")))
+		if err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("initialize photo uploads: %w", err)
+		}
+		uploadRoutes = &uploadHandlers{trips: dependencies.trips, batches: dependencies.uploads, signer: signer}
+		cleanup = func() {
+			_ = signer.Close()
+			_ = db.Close()
+		}
+	} else {
+		log.Printf("MAPMORY_PHOTO_BUCKET is not set; photo upload routes are disabled")
+	}
+
 	// Persistent trip routes require both verified Firebase identity and
 	// resolved application-user identity. The legacy handler is used only
 	// when database-backed mode is disabled.
-	return newHandlerWithPersistentTrips(verifier, dependencies.users, dependencies.trips), func() {
-		_ = db.Close()
-	}, nil
+	return newPersistentHandler(verifier, dependencies.users, dependencies.trips, uploadRoutes), cleanup, nil
 }
 
 // listenAddr returns the address to bind, honouring the PORT variable that

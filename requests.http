@@ -160,3 +160,17 @@ Content-Type: application/json
 {
   "title": "Should not be created"
 }
+
+### Register uploads for the trip created above (201)
+# Database mode with MAPMORY_PHOTO_BUCKET set. "b" is rejected per file.
+# PUT the image bytes to accepted_files[].upload.url with the returned headers.
+POST {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}/batches
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+Content-Type: application/json
+
+{
+  "files": [
+    {"client_file_id": "a", "size_bytes": 123456, "content_type": "image/jpeg"},
+    {"client_file_id": "b", "size_bytes": 10, "content_type": "image/heic"}
+  ]
+}
