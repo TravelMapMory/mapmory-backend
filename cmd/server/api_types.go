@@ -36,6 +36,30 @@ type updateTripRequest struct {
 	Notes *string `json:"notes"`
 }
 
+type registeredBatch struct {
+	BatchID       string         `json:"batch_id"`
+	AcceptedFiles []acceptedFile `json:"accepted_files"`
+	RejectedFiles []rejectedFile `json:"rejected_files"`
+}
+
+type acceptedFile struct {
+	ClientFileID string       `json:"client_file_id"`
+	PhotoID      string       `json:"photo_id"`
+	Upload       uploadTarget `json:"upload"`
+}
+
+type uploadTarget struct {
+	Method    string            `json:"method"`
+	URL       string            `json:"url"`
+	Headers   map[string]string `json:"headers"`
+	ExpiresAt time.Time         `json:"expires_at"`
+}
+
+type rejectedFile struct {
+	ClientFileID string      `json:"client_file_id"`
+	Error        errorDetail `json:"error"`
+}
+
 type healthResponse struct {
 	Status string `json:"status"`
 }

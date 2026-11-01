@@ -37,7 +37,8 @@ in a project outside the Aalto organisation) only changes where they run.
 | Network / firewall | `mapmory-net`; `mapmory-allow-web` (80, 443), `mapmory-allow-iap-ssh` (22 from IAP only) |
 | Images | Artifact Registry repo `mapmory` |
 | CI identity | `mapmory-deployer@…` (push to `mapmory` only), WIF pool `github` / provider `github-oidc` |
-| VM identity | `mapmory-vm@…` (read `mapmory`, write logs and metrics) |
+| VM identity | `mapmory-vm@…` (read `mapmory`, write logs and metrics; object user on the photo bucket; signs its own URLs) |
+| Photo bucket | `mapmory-2026-photos`: private (uniform access, public access prevention), CORS `PUT` from `http://localhost:5173` and `https://mapmory.app` |
 
 The WIF provider accepts a GitHub token only if all of these hold: the org is
 TravelMapMory (`repository_owner_id 331570017`), the repo is one of these two
@@ -52,10 +53,26 @@ slow or re-run job) pushes `:<sha>` but leaves `:main` alone.
 | Variable | Value | Why |
 |---|---|---|
 | `FIREBASE_PROJECT_ID` | `mapmory-development` | The API verifies Firebase ID tokens for this project and refuses to start without it |
+| `MAPMORY_PHOTO_BUCKET` | `mapmory-2026-photos` | Private bucket for photo originals; enables upload registration in database mode |
+
+`MAPMORY_UPLOAD_SIGNER` stays unset on the VM: the API detects `mapmory-vm` from
+the metadata server and signs through the IAM Credentials API. Upload routes
+exist only in database mode, which the VM does not enable yet.
 
 No service-account key is needed. Token verification only fetches Google's public
 certificates, and the Firebase Admin SDK's startup credential lookup is satisfied by
 the VM's own identity (`mapmory-vm`) through the metadata server.
+
+A backend run on a laptop signs upload URLs as `MAPMORY_UPLOAD_SIGNER`
+(`mapmory-vm`) through the developer's own ADC (`gcloud auth
+application-default login` with an Aalto account), without a key. This needs Token Creator on `mapmory-vm`, which an
+Owner grants per person:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  mapmory-vm@mapmory-2026.iam.gserviceaccount.com --project mapmory-2026 \
+  --member user:<name>@aalto.fi --role roles/iam.serviceAccountTokenCreator
+```
 
 To change a value, edit `cloud-init.yaml`, apply it as described under *Change the
 host setup*, and recreate the container (`sudo docker rm -f api`), because a

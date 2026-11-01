@@ -8,7 +8,7 @@ import (
 )
 
 func TestLoadLocalEnv(t *testing.T) {
-	for _, key := range []string{"FIREBASE_PROJECT_ID", "DATABASE_URL", "MAPMORY_ENABLE_DB_USER_RESOLUTION", "TEST_PASSWORD", "FIREBASE_ID_TOKEN"} {
+	for _, key := range []string{"FIREBASE_PROJECT_ID", "DATABASE_URL", "MAPMORY_ENABLE_DB_USER_RESOLUTION", "MAPMORY_PHOTO_BUCKET", "TEST_PASSWORD", "FIREBASE_ID_TOKEN"} {
 		original, exists := os.LookupEnv(key)
 		os.Unsetenv(key)
 		t.Cleanup(func() {
@@ -26,6 +26,7 @@ func TestLoadLocalEnv(t *testing.T) {
 		"FIREBASE_PROJECT_ID=mapmory-development",
 		"DATABASE_URL='postgres://localhost/mapmory?sslmode=disable'",
 		"MAPMORY_ENABLE_DB_USER_RESOLUTION=true",
+		"MAPMORY_PHOTO_BUCKET=mapmory-2026-photos",
 		"TEST_PASSWORD=private-test-password",
 		"FIREBASE_ID_TOKEN=test-token",
 		"",
@@ -43,6 +44,7 @@ func TestLoadLocalEnv(t *testing.T) {
 		"FIREBASE_PROJECT_ID":               "override-project",
 		"DATABASE_URL":                      "postgres://localhost/mapmory?sslmode=disable",
 		"MAPMORY_ENABLE_DB_USER_RESOLUTION": "true",
+		"MAPMORY_PHOTO_BUCKET":              "mapmory-2026-photos",
 	} {
 		if got := os.Getenv(key); got != want {
 			t.Errorf("%s = %q; want %q", key, got, want)
