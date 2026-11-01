@@ -53,19 +53,20 @@ slow or re-run job) pushes `:<sha>` but leaves `:main` alone.
 | Variable | Value | Why |
 |---|---|---|
 | `FIREBASE_PROJECT_ID` | `mapmory-development` | The API verifies Firebase ID tokens for this project and refuses to start without it |
-| `MAPMORY_PHOTO_BUCKET` | `mapmory-2026-photos` | Private bucket for photo originals; enables upload registration in database mode |
+| `MAPMORY_PHOTO_BUCKET` | `mapmory-2026-photos` | Private bucket for photo originals and display images; enables the upload and photo routes in database mode |
 
 `MAPMORY_UPLOAD_SIGNER` stays unset on the VM: the API detects `mapmory-vm` from
-the metadata server and signs through the IAM Credentials API. Upload routes
+the metadata server, uses it for storage and signs through the IAM Credentials API. Upload routes
 exist only in database mode, which the VM does not enable yet.
 
 No service-account key is needed. Token verification only fetches Google's public
 certificates, and the Firebase Admin SDK's startup credential lookup is satisfied by
 the VM's own identity (`mapmory-vm`) through the metadata server.
 
-A backend run on a laptop signs upload URLs as `MAPMORY_UPLOAD_SIGNER`
-(`mapmory-vm`) through the developer's own ADC (`gcloud auth
-application-default login` with an Aalto account), without a key. This needs Token Creator on `mapmory-vm`, which an
+A backend run on a laptop acts as `MAPMORY_UPLOAD_SIGNER` (`mapmory-vm`) for
+the bucket and for signing, impersonating it through the developer's own ADC
+(`gcloud auth application-default login` with an Aalto account), without a key.
+The developer needs no access to the bucket itself. This needs Token Creator on `mapmory-vm`, which an
 Owner grants per person:
 
 ```bash

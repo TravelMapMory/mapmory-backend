@@ -256,6 +256,9 @@ func newPersistentHandler(verifier auth.Verifier, resolver appuser.Resolver, rep
 	mux.Handle("PATCH /api/trips/{trip_id}", protected(handlers.update))
 	if uploads != nil {
 		mux.Handle("POST /api/trips/{trip_id}/batches", protected(uploads.registerBatch))
+		mux.Handle("GET /api/trips/{trip_id}/photos", protected(uploads.listTripPhotos))
+		mux.Handle("GET /api/batches/{batch_id}", protected(uploads.getBatch))
+		mux.Handle("POST /api/batches/{batch_id}/files/{client_file_id}/complete", protected(uploads.completeUpload))
 	}
 	return mux
 }

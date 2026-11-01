@@ -6,8 +6,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 	"unicode/utf8"
 
+	"github.com/TravelMapMory/mapmory-backend/internal/photos"
 	"github.com/TravelMapMory/mapmory-backend/internal/photostorage"
 	"github.com/TravelMapMory/mapmory-backend/internal/trips"
 	"github.com/TravelMapMory/mapmory-backend/internal/uploads"
@@ -17,11 +19,28 @@ import (
 // maxRegisterBodyBytes comfortably fits 100 files with 100-character IDs.
 const maxRegisterBodyBytes = 256 << 10
 
-// uploadHandlers registers upload batches for trips owned by the caller.
+// uploadHandlers serves the photo lifecycle for trips owned by the caller:
+// registration, completion and processing, and listing.
 type uploadHandlers struct {
 	trips   trips.Repository
 	batches uploads.Repository
-	signer  photostorage.Signer
+	photos  photos.Repository
+	store   photostorage.Store
+	// processing admits one image at a time: one DisplayJPEG call can hold
+	// about 265 MiB (docs/photo-processing.md).
+	processing chan struct{}
+	now        func() time.Time
+}
+
+func newUploadHandlers(tripRepo trips.Repository, batches uploads.Repository, photoRepo photos.Repository, store photostorage.Store) *uploadHandlers {
+	return &uploadHandlers{
+		trips:      tripRepo,
+		batches:    batches,
+		photos:     photoRepo,
+		store:      store,
+		processing: make(chan struct{}, 1),
+		now:        time.Now,
+	}
 }
 
 type uploadFileInput struct {
@@ -186,7 +205,7 @@ func (h *uploadHandlers) registerBatch(w http.ResponseWriter, r *http.Request) {
 				SizeBytes:    file.sizeBytes,
 				ObjectName:   uploads.ObjectName(tripID, photoID),
 			}
-			upload, err := h.signer.SignUpload(record.ObjectName, record.ContentType, record.SizeBytes)
+			upload, err := h.store.SignUpload(record.ObjectName, record.ContentType, record.SizeBytes)
 			if err != nil {
 				uploadInternalError(w, "upload signing", err)
 				return

@@ -7,10 +7,14 @@ info:
     owner-scoped create/list/get/update trip operations implemented in PostgreSQL
     database mode. The legacy in-memory mode does not implement this full contract.
 
-    Batch registration (registerBatch) is implemented in database mode when a
-    photo bucket is configured. Cursor-based trip pagination, photo listing,
-    batch status and upload completion remain proposals, not implemented endpoints. Map, geocoding, sharing, deletion,
-    retry routes, and upload URL renewal are outside this draft.
+    The upload lifecycle (registerBatch, completeUpload, getBatch) and photo
+    listing (listTripPhotos) are implemented in database mode when a photo
+    bucket is configured. completeUpload processes within the request, one
+    image at a time; a photo left in processing for 10 minutes by an
+    interrupted request can be completed again. error_code is one of
+    unsupported_type, file_too_large, image_too_large or invalid_image.
+    Cursor-based trip pagination remains a proposal. Map, geocoding, sharing,
+    deletion, retry routes, and upload URL renewal are outside this draft.
 
     Implemented private trip routes require a Firebase ID token; the backend
     resolves the application-user identity and enforces ownership.

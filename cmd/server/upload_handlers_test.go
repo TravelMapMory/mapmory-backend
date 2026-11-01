@@ -32,12 +32,22 @@ func (f *batchRepositoryFake) CreateBatch(_ context.Context, ownerID, tripID, ba
 	return f.err
 }
 
-type signerFake struct {
-	calls int
-	err   error
+// storeFake keeps objects in memory and signs fake URLs.
+type storeFake struct {
+	calls   int
+	err     error
+	objects map[string]storedObject
+	writes  int
+	reads   int
 }
 
-func (s *signerFake) SignUpload(object, contentType string, size int64) (photostorage.Upload, error) {
+type storedObject struct {
+	data        []byte
+	contentType string
+	created     time.Time
+}
+
+func (s *storeFake) SignUpload(object, contentType string, size int64) (photostorage.Upload, error) {
 	s.calls++
 	if s.err != nil {
 		return photostorage.Upload{}, s.err
@@ -50,8 +60,51 @@ func (s *signerFake) SignUpload(object, contentType string, size int64) (photost
 	}, nil
 }
 
+func (s *storeFake) put(object, contentType string, data []byte) {
+	if s.objects == nil {
+		s.objects = make(map[string]storedObject)
+	}
+	s.objects[object] = storedObject{data: data, contentType: contentType, created: time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)}
+}
+
+func (s *storeFake) Stat(_ context.Context, object string) (photostorage.ObjectInfo, error) {
+	stored, ok := s.objects[object]
+	if !ok {
+		return photostorage.ObjectInfo{}, photostorage.ErrObjectNotFound
+	}
+	return photostorage.ObjectInfo{Size: int64(len(stored.data)), ContentType: stored.contentType, Created: stored.created}, nil
+}
+
+func (s *storeFake) Read(_ context.Context, object string, limit int64) ([]byte, error) {
+	s.reads++
+	stored, ok := s.objects[object]
+	if !ok {
+		return nil, photostorage.ErrObjectNotFound
+	}
+	if int64(len(stored.data)) > limit {
+		return nil, photostorage.ErrObjectTooLarge
+	}
+	return stored.data, nil
+}
+
+func (s *storeFake) Write(_ context.Context, object, contentType string, data []byte) error {
+	s.writes++
+	if s.err != nil {
+		return s.err
+	}
+	s.put(object, contentType, data)
+	return nil
+}
+
+func (s *storeFake) SignDisplay(object string) (string, time.Time, error) {
+	if s.err != nil {
+		return "", time.Time{}, s.err
+	}
+	return "https://storage.googleapis.com/bucket/" + object + "?signed", time.Date(2026, 11, 1, 13, 0, 0, 0, time.UTC), nil
+}
+
 // uploadTestHandler serves one trip owned by owner; any other trip is absent.
-func uploadTestHandler(owner, ownedTrip uuid.UUID, batches *batchRepositoryFake, signer *signerFake) http.Handler {
+func uploadTestHandler(owner, ownedTrip uuid.UUID, batches *batchRepositoryFake, signer *storeFake) http.Handler {
 	verifier := endpointVerifierFunc(func(_ context.Context, token string) (*firebaseauth.Token, error) {
 		if token != "valid" {
 			return nil, errors.New("invalid token")
@@ -66,12 +119,12 @@ func uploadTestHandler(owner, ownedTrip uuid.UUID, batches *batchRepositoryFake,
 		return trips.Trip{ID: id, OwnerID: o}, nil
 	}}
 	return newPersistentHandler(verifier, resolver, tripRepo,
-		&uploadHandlers{trips: tripRepo, batches: batches, signer: signer})
+		newUploadHandlers(tripRepo, batches, nil, signer))
 }
 
 func TestRegisterBatchAcceptsAndRejectsPerFile(t *testing.T) {
 	owner, tripID := uuid.New(), uuid.New()
-	batches, signer := &batchRepositoryFake{}, &signerFake{}
+	batches, signer := &batchRepositoryFake{}, &storeFake{}
 	h := uploadTestHandler(owner, tripID, batches, signer)
 
 	body := `{"files":[
@@ -122,7 +175,7 @@ func TestRegisterBatchAcceptsAndRejectsPerFile(t *testing.T) {
 
 func TestRegisterBatchAllRejectedStillCreatesEmptyBatch(t *testing.T) {
 	owner, tripID := uuid.New(), uuid.New()
-	batches, signer := &batchRepositoryFake{}, &signerFake{}
+	batches, signer := &batchRepositoryFake{}, &storeFake{}
 	h := uploadTestHandler(owner, tripID, batches, signer)
 
 	response := tripRequest(h, "POST", "/api/trips/"+tripID.String()+"/batches",
@@ -171,7 +224,7 @@ func TestRegisterBatchRejectsMalformedRequests(t *testing.T) {
 		"duplicate client id": `{"files":[{` + valid + `},{` + valid + `}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			batches, signer := &batchRepositoryFake{}, &signerFake{}
+			batches, signer := &batchRepositoryFake{}, &storeFake{}
 			h := uploadTestHandler(owner, tripID, batches, signer)
 			response := tripRequest(h, "POST", "/api/trips/"+tripID.String()+"/batches", body, "Bearer valid")
 			if response.Code != http.StatusBadRequest {
@@ -192,7 +245,7 @@ func TestRegisterBatchHidesOtherUsersTrips(t *testing.T) {
 		"invalid trip id":   "/api/trips/not-a-uuid/batches",
 	} {
 		t.Run(name, func(t *testing.T) {
-			batches, signer := &batchRepositoryFake{}, &signerFake{}
+			batches, signer := &batchRepositoryFake{}, &storeFake{}
 			response := tripRequest(uploadTestHandler(owner, ownedTrip, batches, signer), "POST", path, body, "Bearer valid")
 			if response.Code != http.StatusNotFound {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
@@ -206,7 +259,7 @@ func TestRegisterBatchHidesOtherUsersTrips(t *testing.T) {
 
 func TestRegisterBatchRequiresAuthentication(t *testing.T) {
 	owner, tripID := uuid.New(), uuid.New()
-	batches, signer := &batchRepositoryFake{}, &signerFake{}
+	batches, signer := &batchRepositoryFake{}, &storeFake{}
 	h := uploadTestHandler(owner, tripID, batches, signer)
 	body := `{"files":[{"client_file_id":"a","size_bytes":1,"content_type":"image/jpeg"}]}`
 	for _, authorization := range []string{"", "Bearer invalid"} {
@@ -225,7 +278,7 @@ func TestRegisterBatchStorageFailures(t *testing.T) {
 	body := `{"files":[{"client_file_id":"a","size_bytes":1,"content_type":"image/jpeg"}]}`
 
 	t.Run("signing fails before anything is stored", func(t *testing.T) {
-		batches, signer := &batchRepositoryFake{}, &signerFake{err: errors.New("iam denied")}
+		batches, signer := &batchRepositoryFake{}, &storeFake{err: errors.New("iam denied")}
 		response := tripRequest(uploadTestHandler(owner, tripID, batches, signer), "POST", "/api/trips/"+tripID.String()+"/batches", body, "Bearer valid")
 		if response.Code != http.StatusInternalServerError || batches.calls != 0 {
 			t.Fatalf("status=%d batch calls=%d", response.Code, batches.calls)
@@ -235,14 +288,14 @@ func TestRegisterBatchStorageFailures(t *testing.T) {
 		}
 	})
 	t.Run("trip disappears before insert", func(t *testing.T) {
-		batches, signer := &batchRepositoryFake{err: uploads.ErrTripNotFound}, &signerFake{}
+		batches, signer := &batchRepositoryFake{err: uploads.ErrTripNotFound}, &storeFake{}
 		response := tripRequest(uploadTestHandler(owner, tripID, batches, signer), "POST", "/api/trips/"+tripID.String()+"/batches", body, "Bearer valid")
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("status=%d", response.Code)
 		}
 	})
 	t.Run("database error", func(t *testing.T) {
-		batches, signer := &batchRepositoryFake{err: errors.New("connection reset")}, &signerFake{}
+		batches, signer := &batchRepositoryFake{err: errors.New("connection reset")}, &storeFake{}
 		response := tripRequest(uploadTestHandler(owner, tripID, batches, signer), "POST", "/api/trips/"+tripID.String()+"/batches", body, "Bearer valid")
 		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("status=%d", response.Code)
