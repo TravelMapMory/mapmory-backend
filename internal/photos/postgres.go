@@ -132,6 +132,21 @@ func (r *PostgresRepository) Finish(ctx context.Context, photoID uuid.UUID, resu
 	return photo, nil
 }
 
+func (r *PostgresRepository) Get(ctx context.Context, ownerID, photoID uuid.UUID) (Photo, error) {
+	photo, err := scanPhoto(r.db.QueryRowContext(ctx, `
+		SELECT `+photoColumns+`
+		FROM photos p JOIN trips t ON t.id = p.trip_id
+		WHERE p.id = $1 AND t.owner_id = $2
+	`, photoID, ownerID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Photo{}, ErrNotFound
+	}
+	if err != nil {
+		return Photo{}, fmt.Errorf("get photo: %w", err)
+	}
+	return photo, nil
+}
+
 func (r *PostgresRepository) GetBatch(ctx context.Context, ownerID, batchID uuid.UUID) (uuid.UUID, []Photo, error) {
 	var tripID uuid.UUID
 	err := r.db.QueryRowContext(ctx, `
@@ -166,21 +181,23 @@ func (r *PostgresRepository) ListByTrip(ctx context.Context, ownerID, tripID uui
 		return nil, ErrNotFound
 	}
 
-	var afterTime *time.Time
+	var afterCapture *string
+	var afterUpload *time.Time
 	var afterID *uuid.UUID
 	if after != nil {
-		afterTime, afterID = after.UploadedAt, &after.ID
+		afterCapture, afterUpload, afterID = after.CaptureTimeLocal, after.UploadedAt, &after.ID
 	}
-	// Keyset pagination over (uploaded_at IS NULL, uploaded_at DESC, id DESC).
+	// Keyset pagination over the photos_trip_capture_idx expressions. infinity
+	// puts missing values last and keeps the row comparison NULL-free.
 	photos, err := r.queryPhotos(ctx, `
 		SELECT `+photoColumns+` FROM photos p
 		WHERE p.trip_id = $1
 		  AND ($2::uuid IS NULL
-		       OR ($3::timestamptz IS NOT NULL AND (p.uploaded_at IS NULL OR (p.uploaded_at, p.id) < ($3, $2)))
-		       OR ($3::timestamptz IS NULL AND p.uploaded_at IS NULL AND p.id < $2))
-		ORDER BY (p.uploaded_at IS NULL), p.uploaded_at DESC, p.id DESC
-		LIMIT $4
-	`, tripID, afterID, afterTime, limit)
+		       OR (COALESCE(p.capture_time_local, 'infinity'), COALESCE(p.uploaded_at, 'infinity'), p.id)
+		        > (COALESCE($3::timestamp, 'infinity'), COALESCE($4::timestamptz, 'infinity'), $2))
+		ORDER BY COALESCE(p.capture_time_local, 'infinity'), COALESCE(p.uploaded_at, 'infinity'), p.id
+		LIMIT $5
+	`, tripID, afterID, afterCapture, afterUpload, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list trip photos: %w", err)
 	}

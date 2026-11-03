@@ -44,7 +44,7 @@ For a real Firebase ID token, use [Firebase authentication testing](docs/firebas
 | Geoapify place resolution | Library only |
 | `POST /api/trips/{trip_id}/batches` | Database mode with `MAPMORY_PHOTO_BUCKET`: registers JPEG/PNG files as pending photos and returns signed GCS `PUT` URLs |
 | `POST /api/batches/{batch_id}/files/{client_file_id}/complete` | Same mode: checks the uploaded object, extracts EXIF, stores an EXIF-free display JPEG and returns the photo |
-| `GET /api/batches/{batch_id}`, `GET /api/trips/{trip_id}/photos` | Same mode: owner-only batch status and paginated photo list, with signed display-image URLs |
+| `GET /api/batches/{batch_id}`, `GET /api/trips/{trip_id}/photos`, `GET /api/photos/{photo_id}` | Same mode: owner-only batch status, photo list in capture order (cursor-paginated) and single photo, with signed display-image URLs |
 | Sharing, place labels and location correction | Not implemented |
 
 **Security:** Enable `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` to use protected, persistent trip routes. When disabled, trips are **public, shared in memory and lost on restart**; never use the prototype for private information. See [Trip persistence](docs/trip-persistence.md) for ownership and remaining limitations. The OpenAPI document also contains unimplemented proposed endpoints.
