@@ -61,11 +61,13 @@ type Processed struct {
 	DisplayObjectName string
 }
 
-// Cursor marks the last photo of a page. UploadedAt is nil for photos that
-// were never uploaded, which sort after all uploaded ones.
+// Cursor marks the last photo of a page in capture order. CaptureTimeLocal
+// is nil for undated photos and UploadedAt for never-uploaded ones; both sort
+// after every photo that has the value.
 type Cursor struct {
-	UploadedAt *time.Time `json:"u,omitempty"`
-	ID         uuid.UUID  `json:"i"`
+	CaptureTimeLocal *string    `json:"c,omitempty"`
+	UploadedAt       *time.Time `json:"u,omitempty"`
+	ID               uuid.UUID  `json:"i"`
 }
 
 // ErrInvalidCursor is returned by DecodeCursor for a cursor it did not issue.
@@ -87,12 +89,17 @@ func DecodeCursor(value string) (Cursor, error) {
 	if err := json.Unmarshal(data, &cursor); err != nil || cursor.ID == uuid.Nil {
 		return Cursor{}, ErrInvalidCursor
 	}
+	if cursor.CaptureTimeLocal != nil {
+		if _, err := time.Parse(CaptureTimeLayout, *cursor.CaptureTimeLocal); err != nil {
+			return Cursor{}, ErrInvalidCursor
+		}
+	}
 	return cursor, nil
 }
 
 // CursorAfter returns the cursor that continues after photo.
 func CursorAfter(photo Photo) Cursor {
-	return Cursor{UploadedAt: photo.UploadedAt, ID: photo.ID}
+	return Cursor{CaptureTimeLocal: photo.CaptureTimeLocal, UploadedAt: photo.UploadedAt, ID: photo.ID}
 }
 
 // Repository is the storage boundary for photo lifecycle operations.
@@ -109,10 +116,13 @@ type Repository interface {
 	Fail(ctx context.Context, photoID uuid.UUID, uploadedAt time.Time, code string) (Photo, error)
 	// Finish records a claimed photo's processing results.
 	Finish(ctx context.Context, photoID uuid.UUID, result Processed) (Photo, error)
+	// Get returns one of the caller's photos.
+	Get(ctx context.Context, ownerID, photoID uuid.UUID) (Photo, error)
 	// GetBatch returns the caller's batch and all of its photos.
 	GetBatch(ctx context.Context, ownerID, batchID uuid.UUID) (tripID uuid.UUID, photos []Photo, err error)
-	// ListByTrip returns up to limit of the caller's trip photos after cursor,
-	// newest upload first and never-uploaded photos last, ID descending as
-	// the tie-breaker. It returns ErrNotFound for a trip the caller lacks.
+	// ListByTrip returns up to limit of the caller's trip photos after cursor
+	// in capture order (#45): camera-local capture time oldest first, then
+	// upload time oldest first, then ID. Undated and never-uploaded photos
+	// sort last. It returns ErrNotFound for a trip the caller lacks.
 	ListByTrip(ctx context.Context, ownerID, tripID uuid.UUID, after *Cursor, limit int) ([]Photo, error)
 }

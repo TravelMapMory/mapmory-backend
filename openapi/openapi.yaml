@@ -1,20 +1,39 @@
 openapi: 3.1.0
 info:
   title: MapMory — minimal private-flow draft
-  version: 0.0.6
+  version: 0.0.7
   description: |-
-    PROPOSED, pending team review. Version 0.0.6 documents authenticated,
+    PROPOSED, pending team review. Version 0.0.7 documents authenticated,
     owner-scoped create/list/get/update trip operations implemented in PostgreSQL
     database mode. The legacy in-memory mode does not implement this full contract.
 
-    The upload lifecycle (registerBatch, completeUpload, getBatch) and photo
-    listing (listTripPhotos) are implemented in database mode when a photo
-    bucket is configured. completeUpload processes within the request, one
-    image at a time; a photo left in processing for 10 minutes by an
-    interrupted request can be completed again. error_code is one of
+    The upload lifecycle (registerBatch, completeUpload, getBatch), photo
+    listing (listTripPhotos) and photo retrieval (getPhoto) are implemented
+    in database mode when a photo bucket is configured. completeUpload
+    processes within the request, one image at a time. error_code is one of
     unsupported_type, file_too_large, image_too_large or invalid_image.
     Cursor-based trip pagination remains a proposal. Map, geocoding, sharing,
-    deletion, retry routes, and upload URL renewal are outside this draft.
+    deletion and the failed-photo retry route are outside this draft.
+
+    Upload recovery, as implemented:
+    - completeUpload is idempotent: a processed or failed photo is returned
+      as stored and is never processed twice.
+    - A photo left in processing for 10 minutes by an interrupted request
+      can be completed again by a later completeUpload.
+    - A transient server failure during processing returns the photo to
+      pending and 500; the client calls completeUpload again.
+    - Upload URLs expire 15 minutes after registration and are not renewed.
+      While the URL is valid, the client may PUT again and complete. After it
+      expires, completeUpload either succeeds (the bytes arrived) or returns
+      409 upload_missing, and the client registers the file again in a new
+      batch, which creates a new photo.
+    - failed is final for that photo; the image itself is unusable.
+
+    Ordering (backend #45, frontend #25): listTripPhotos uses capture order.
+    The remaining #45 rules belong to endpoints not in this draft: recently
+    uploaded photos (newest upload first, then id) to GET /api/me/summary,
+    and trip date ranges that ignore missing or invalid capture times to the
+    trip representation.
 
     Implemented private trip routes require a Firebase ID token; the backend
     resolves the application-user identity and enforces ownership.
@@ -23,10 +42,8 @@ info:
     - How should batch registration recover from a lost response: an
       Idempotency-Key or client-generated batch ID?
     - Is a persistent uploading state needed, and how is upload start detected?
-    - How should interrupted processing, failed-photo retries, and expired
-      upload URLs be recovered?
-    - Confirm proposed pagination, photo fields, input limits, error codes,
-      and photo-list ordering with the UI.
+    - Confirm proposed pagination, photo fields, input limits and error codes
+      with the UI. Photo-list ordering follows backend #45 and frontend #25.
   contact:
     name: MapMory team
     url: https://github.com/TravelMapMory
@@ -203,9 +220,14 @@ paths:
           maximum: 100
           default: 20
         description: Maximum number of items to return in this page.
-      description: 'Newest uploaded first; pending photos last. Use id as a stable
-        tie-breaker. Empty collections return items: [] and next_cursor: null. Ordering
-        is provisional.'
+      description: 'Capture order (backend #45, frontend #25): capture_time_local
+        oldest first, compared as camera-local wall time without applying
+        capture_utc_offset; equal capture times by uploaded_at oldest first, then
+        by id. Photos without a usable capture time come after all dated photos,
+        and photos that were never uploaded come last within their group. The
+        order is total and cursor pages continue it without gaps or duplicates
+        for an unchanged collection, so clients need not sort across pages.
+        Empty collections return items: [] and next_cursor: null.'
       responses:
         '200':
           description: List photos, including unlocated photos
@@ -213,8 +235,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PhotoPage'
+              examples:
+                mixedStates:
+                  $ref: '#/components/examples/PhotoPageMixed'
         '400':
           $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Photos
+  /photos/{photo_id}:
+    parameters:
+    - name: photo_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getPhoto
+      summary: Get one owned photo
+      description: Return one of the caller's photos with a fresh display_image
+        URL when it has one. A photo in another user's trip returns 404, exactly
+        like a photo that does not exist.
+      responses:
+        '200':
+          description: Get one owned photo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Photo'
+              examples:
+                ready:
+                  $ref: '#/components/examples/PhotoReady'
+                needsLocation:
+                  $ref: '#/components/examples/PhotoNeedsLocation'
+                failed:
+                  $ref: '#/components/examples/PhotoFailed'
         '401':
           $ref: '#/components/responses/401'
         '404':
@@ -254,6 +315,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RegisteredBatch'
+              examples:
+                acceptedAndRejected:
+                  $ref: '#/components/examples/RegisteredBatchMixed'
         '400':
           $ref: '#/components/responses/400'
         '401':
@@ -313,8 +377,9 @@ paths:
         within this request. A processed photo returns its current record without
         reprocessing. A concurrently processing photo or missing uploaded object returns
         409. Image validation failure returns 200 with state: failed and an error_code,
-        because the failure is persisted on the photo. Recovery from an interrupted
-        processing attempt is pending review.'
+        because the failure is persisted on the photo. A photo whose processing was
+        interrupted for 10 minutes can be completed again; see Upload recovery in
+        the API description.'
       responses:
         '200':
           description: Process an uploaded file and return its photo
@@ -322,6 +387,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Photo'
+              examples:
+                ready:
+                  $ref: '#/components/examples/PhotoReady'
+                needsLocation:
+                  $ref: '#/components/examples/PhotoNeedsLocation'
+                failed:
+                  $ref: '#/components/examples/PhotoFailed'
         '401':
           $ref: '#/components/responses/401'
         '404':
@@ -365,6 +437,20 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+          examples:
+            uploadMissing:
+              summary: The file has not reached storage; PUT it, or register it again
+                if the upload URL expired
+              value:
+                error:
+                  code: upload_missing
+                  message: the file has not been uploaded yet
+            processingInProgress:
+              summary: Another request is processing this photo; poll getBatch
+              value:
+                error:
+                  code: processing_in_progress
+                  message: the photo is already being processed
     '503':
       description: 'Application-user resolution unavailable; error.code: user_resolution_unavailable.'
       content:
@@ -378,6 +464,133 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+  examples:
+    PhotoReady:
+      summary: Processed photo with EXIF GPS and capture time
+      value:
+        id: 0b9c6a7e-2f4d-4c1a-9e8b-1a2b3c4d5e6f
+        trip_id: a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b
+        batch_id: 6f1e2d3c-4b5a-4968-8776-655443322110
+        client_file_id: IMG_0412.jpg-3482114-1751000000000
+        state: ready
+        error_code: null
+        uploaded_at: '2026-11-01T18:20:05Z'
+        capture_time_local: '2026-07-14T09:30:00'
+        capture_utc_offset: '+09:00'
+        exif_lat: 35.0116
+        exif_lng: 135.7681
+        lat: 35.0116
+        lng: 135.7681
+        display_image:
+          url: https://storage.googleapis.com/mapmory-2026-photos/display/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/0b9c6a7e-2f4d-4c1a-9e8b-1a2b3c4d5e6f.jpg?X-Goog-Signature=...
+          expires_at: '2026-11-01T19:20:05Z'
+    PhotoNeedsLocation:
+      summary: Processed photo without EXIF metadata; unknown values are null
+      value:
+        id: 1c0d7b8f-3a5e-4d2b-8f9c-2b3c4d5e6f70
+        trip_id: a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b
+        batch_id: 6f1e2d3c-4b5a-4968-8776-655443322110
+        client_file_id: screenshot.png-201844-1751000100000
+        state: needs-location
+        error_code: null
+        uploaded_at: '2026-11-01T18:20:07Z'
+        capture_time_local: null
+        capture_utc_offset: null
+        exif_lat: null
+        exif_lng: null
+        lat: null
+        lng: null
+        display_image:
+          url: https://storage.googleapis.com/mapmory-2026-photos/display/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/1c0d7b8f-3a5e-4d2b-8f9c-2b3c4d5e6f70.jpg?X-Goog-Signature=...
+          expires_at: '2026-11-01T19:20:07Z'
+    PhotoFailed:
+      summary: The uploaded bytes are not a usable image; final for this photo
+      value:
+        id: 2d1e8c90-4b6f-4e3c-9a0d-3c4d5e6f7081
+        trip_id: a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b
+        batch_id: 6f1e2d3c-4b5a-4968-8776-655443322110
+        client_file_id: broken.jpg-1024-1751000200000
+        state: failed
+        error_code: invalid_image
+        uploaded_at: '2026-11-01T18:20:09Z'
+        capture_time_local: null
+        capture_utc_offset: null
+        exif_lat: null
+        exif_lng: null
+        lat: null
+        lng: null
+        display_image: null
+    PhotoPageMixed:
+      summary: One page in capture order; the undated photo and the never-uploaded
+        photo come last
+      value:
+        items:
+        - id: 0b9c6a7e-2f4d-4c1a-9e8b-1a2b3c4d5e6f
+          trip_id: a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b
+          batch_id: 6f1e2d3c-4b5a-4968-8776-655443322110
+          client_file_id: IMG_0412.jpg-3482114-1751000000000
+          state: ready
+          error_code: null
+          uploaded_at: '2026-11-01T18:20:05Z'
+          capture_time_local: '2026-07-14T09:30:00'
+          capture_utc_offset: '+09:00'
+          exif_lat: 35.0116
+          exif_lng: 135.7681
+          lat: 35.0116
+          lng: 135.7681
+          display_image:
+            url: https://storage.googleapis.com/mapmory-2026-photos/display/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/0b9c6a7e-2f4d-4c1a-9e8b-1a2b3c4d5e6f.jpg?X-Goog-Signature=...
+            expires_at: '2026-11-01T19:20:05Z'
+        - id: 1c0d7b8f-3a5e-4d2b-8f9c-2b3c4d5e6f70
+          trip_id: a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b
+          batch_id: 6f1e2d3c-4b5a-4968-8776-655443322110
+          client_file_id: screenshot.png-201844-1751000100000
+          state: needs-location
+          error_code: null
+          uploaded_at: '2026-11-01T18:20:07Z'
+          capture_time_local: null
+          capture_utc_offset: null
+          exif_lat: null
+          exif_lng: null
+          lat: null
+          lng: null
+          display_image:
+            url: https://storage.googleapis.com/mapmory-2026-photos/display/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/1c0d7b8f-3a5e-4d2b-8f9c-2b3c4d5e6f70.jpg?X-Goog-Signature=...
+            expires_at: '2026-11-01T19:20:07Z'
+        - id: 3e2f9da1-5c70-4f4d-8b1e-4d5e6f708192
+          trip_id: a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b
+          batch_id: 6f1e2d3c-4b5a-4968-8776-655443322110
+          client_file_id: IMG_0413.jpg-2950012-1751000300000
+          state: pending
+          error_code: null
+          uploaded_at: null
+          capture_time_local: null
+          capture_utc_offset: null
+          exif_lat: null
+          exif_lng: null
+          lat: null
+          lng: null
+          display_image: null
+        next_cursor: eyJpIjoiM2UyZjlkYTEtNWM3MC00ZjRkLThiMWUtNGQ1ZTZmNzA4MTkyIn0
+    RegisteredBatchMixed:
+      summary: One JPEG accepted, one HEIC rejected for its type
+      value:
+        batch_id: 6f1e2d3c-4b5a-4968-8776-655443322110
+        accepted_files:
+        - client_file_id: IMG_0412.jpg-3482114-1751000000000
+          photo_id: 0b9c6a7e-2f4d-4c1a-9e8b-1a2b3c4d5e6f
+          upload:
+            method: PUT
+            url: https://storage.googleapis.com/mapmory-2026-photos/originals/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/0b9c6a7e-2f4d-4c1a-9e8b-1a2b3c4d5e6f?X-Goog-Signature=...
+            headers:
+              Content-Type: image/jpeg
+              x-goog-content-length-range: 3482114,3482114
+            expires_at: '2026-11-01T18:35:00Z'
+        rejected_files:
+        - client_file_id: IMG_0414.heic-1880331-1751000400000
+          error:
+            code: unsupported_type
+            message: only JPEG and PNG images are supported
   schemas:
     Error:
       type: object
@@ -462,8 +675,10 @@ components:
         expires_at:
           type: string
           format: date-time
-      description: Temporary owner-only display-image URL. Refetch the photo list
-        or batch to refresh expired URLs. No original image URL is returned.
+      description: Temporary owner-only display-image URL, valid for 1 hour. The
+        server reuses a URL while at least 30 minutes remain, so refetching the
+        photo list, photo or batch always returns one valid for 30 minutes or
+        more. No original image URL is returned.
       title: DisplayImage
     Photo:
       type: object
@@ -621,6 +836,8 @@ components:
           format: date-time
       description: Send image bytes directly to this URL using the returned method
         and headers. The browser does not attach its Firebase bearer token to GCS.
+        The URL expires 15 minutes after registration (expires_at) and binds the
+        content type and exact size; see Upload recovery in the API description.
       title: UploadTarget
     AcceptedFile:
       type: object

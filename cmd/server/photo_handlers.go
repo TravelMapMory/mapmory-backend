@@ -251,8 +251,32 @@ func (h *uploadHandlers) getBatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// getPhoto returns one of the caller's photos (contract getPhoto).
+func (h *uploadHandlers) getPhoto(w http.ResponseWriter, r *http.Request) {
+	owner, ok := tripOwner(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	photoID, err := uuid.Parse(r.PathValue("photo_id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "photo not found")
+		return
+	}
+	photo, err := h.photos.Get(r.Context(), owner, photoID)
+	if errors.Is(err, photos.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "photo not found")
+		return
+	}
+	if err != nil {
+		uploadInternalError(w, "photo lookup", err)
+		return
+	}
+	h.writePhoto(w, photo)
+}
+
 // listTripPhotos returns one page of the caller's trip photos (contract
-// listTripPhotos): newest upload first, never-uploaded photos last.
+// listTripPhotos) in capture order: oldest capture first, undated last.
 func (h *uploadHandlers) listTripPhotos(w http.ResponseWriter, r *http.Request) {
 	owner, ok := tripOwner(r)
 	if !ok {

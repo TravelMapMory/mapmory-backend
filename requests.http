@@ -184,6 +184,11 @@ Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 GET {{baseUrl}}/api/batches/{{registerBatch.response.body.$.batch_id}}
 Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
 
-### Photos of the trip created above, newest upload first (200)
+### Photos of the trip created above, oldest capture first, undated last (200)
+# @name listTripPhotos
 GET {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}/photos?limit=20
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+
+### First photo of that list with a fresh display URL (200; 404 for another user's photo)
+GET {{baseUrl}}/api/photos/{{listTripPhotos.response.body.$.items[0].id}}
 Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}

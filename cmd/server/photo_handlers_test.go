@@ -110,6 +110,33 @@ func (f *photoRepositoryFake) Finish(_ context.Context, id uuid.UUID, result pho
 	return *photo, nil
 }
 
+// get returns a photo by ID if the caller owns it
+func (f *photoRepositoryFake) Get(_ context.Context, owner, id uuid.UUID) (photos.Photo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	photo, ok := f.photos[id]
+	if owner != f.owner || !ok {
+		return photos.Photo{}, photos.ErrNotFound
+	}
+	return *photo, nil
+}
+
+// capturesBefore reports whether a precedes b in the capture order of ListByTrip: capture time, then upload time, then ID; missing values last
+func capturesBefore(a, b photos.Photo) bool {
+	switch {
+	case (a.CaptureTimeLocal == nil) != (b.CaptureTimeLocal == nil):
+		return a.CaptureTimeLocal != nil
+	case a.CaptureTimeLocal != nil && *a.CaptureTimeLocal != *b.CaptureTimeLocal:
+		return *a.CaptureTimeLocal < *b.CaptureTimeLocal
+	case (a.UploadedAt == nil) != (b.UploadedAt == nil):
+		return a.UploadedAt != nil
+	case a.UploadedAt != nil && !a.UploadedAt.Equal(*b.UploadedAt):
+		return a.UploadedAt.Before(*b.UploadedAt)
+	default:
+		return a.ID.String() < b.ID.String()
+	}
+}
+
 func (f *photoRepositoryFake) GetBatch(_ context.Context, owner, batchID uuid.UUID) (uuid.UUID, []photos.Photo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -135,20 +162,11 @@ func (f *photoRepositoryFake) ListByTrip(_ context.Context, owner, tripID uuid.U
 	for _, photo := range f.photos {
 		all = append(all, *photo)
 	}
-	less := func(a, b photos.Photo) bool { // a sorts before b
-		switch {
-		case (a.UploadedAt == nil) != (b.UploadedAt == nil):
-			return a.UploadedAt != nil
-		case a.UploadedAt != nil && !a.UploadedAt.Equal(*b.UploadedAt):
-			return a.UploadedAt.After(*b.UploadedAt)
-		default:
-			return a.ID.String() > b.ID.String()
-		}
-	}
+	less := capturesBefore
 	sort.Slice(all, func(i, j int) bool { return less(all[i], all[j]) })
 	start := 0
 	if after != nil {
-		marker := photos.Photo{ID: after.ID, UploadedAt: after.UploadedAt}
+		marker := photos.Photo{ID: after.ID, CaptureTimeLocal: after.CaptureTimeLocal, UploadedAt: after.UploadedAt}
 		for start < len(all) && !less(marker, all[start]) {
 			start++
 		}
@@ -396,15 +414,28 @@ func TestGetBatchReturnsPhotoStates(t *testing.T) {
 func TestListTripPhotosPaginates(t *testing.T) {
 	env := newPhotoTestEnv(t)
 	base := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
-	var want []string
-	for i := 0; i < 5; i++ {
-		photo := env.repo.add(env.batchID, string(rune('a'+i)), 10)
-		uploaded := base.Add(time.Duration(i) * time.Minute)
-		env.repo.photos[photo.ID].UploadedAt = &uploaded
-		want = append([]string{photo.ID.String()}, want...) // newest first
+	set := func(clientFileID, capture string, uploadedAfter time.Duration, uploaded bool) string {
+		photo := env.repo.add(env.batchID, clientFileID, 10)
+		stored := env.repo.photos[photo.ID]
+		if capture != "" {
+			stored.CaptureTimeLocal = &capture
+		}
+		if uploaded {
+			at := base.Add(uploadedAfter)
+			stored.UploadedAt = &at
+		}
+		return photo.ID.String()
 	}
-	pending := env.repo.add(env.batchID, "pending", 10)
-	want = append(want, pending.ID.String()) // never-uploaded photos last
+	// capture time decides, even against upload order.
+	late := set("late", "2026-07-02T08:00:00", 0, true)
+	early := set("early", "2026-07-01T08:00:00", 4*time.Minute, true)
+	// equal capture times: the earlier upload first.
+	tieSecond := set("tie-second", "2026-07-01T12:00:00", 3*time.Minute, true)
+	tieFirst := set("tie-first", "2026-07-01T12:00:00", time.Minute, true)
+	// undated photos come last, never-uploaded ones after them.
+	undated := set("undated", "", 2*time.Minute, true)
+	pending := set("pending", "", 0, false)
+	want := []string{early, tieFirst, tieSecond, late, undated, pending}
 
 	var got []string
 	cursor := ""
@@ -446,7 +477,9 @@ func TestListTripPhotosValidation(t *testing.T) {
 		!strings.Contains(response.Body.String(), `"next_cursor":null`) {
 		t.Fatalf("empty trip: status=%d body=%s", response.Code, response.Body.String())
 	}
-	for _, query := range []string{"?limit=0", "?limit=101", "?limit=x", "?cursor=not-a-cursor"} {
+	badCapture := "yesterday"
+	badCursor := photos.Cursor{CaptureTimeLocal: &badCapture, ID: uuid.New()}.Encode()
+	for _, query := range []string{"?limit=0", "?limit=101", "?limit=x", "?cursor=not-a-cursor", "?cursor=" + badCursor} {
 		if response := tripRequest(env.handler, "GET", base+query, "", "Bearer valid"); response.Code != http.StatusBadRequest {
 			t.Fatalf("%s: status=%d", query, response.Code)
 		}
@@ -456,6 +489,37 @@ func TestListTripPhotosValidation(t *testing.T) {
 	}
 	if response := tripRequest(env.handler, "GET", base, "", ""); response.Code != http.StatusUnauthorized {
 		t.Fatalf("no token: status=%d", response.Code)
+	}
+}
+
+// getPhoto returns one of the caller's photos (contract getPhoto)
+func TestGetPhoto(t *testing.T) {
+	env := newPhotoTestEnv(t)
+	env.registerUploaded("done", readFixture(t, "gps.jpg"))
+	completed, _, _ := env.complete("done")
+	response := tripRequest(env.handler, "GET", "/api/photos/"+completed.ID, "", "Bearer valid")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var photo apiPhoto
+	if err := json.Unmarshal(response.Body.Bytes(), &photo); err != nil {
+		t.Fatal(err)
+	}
+	if photo.ID != completed.ID || photo.State != photos.StateReady || photo.DisplayImage == nil {
+		t.Fatalf("photo = %+v", photo)
+	}
+	for _, path := range []string{"/api/photos/" + uuid.NewString(), "/api/photos/not-a-uuid"} {
+		if response := tripRequest(env.handler, "GET", path, "", "Bearer valid"); response.Code != http.StatusNotFound {
+			t.Fatalf("%s: status=%d", path, response.Code)
+		}
+	}
+	if response := tripRequest(env.handler, "GET", "/api/photos/"+completed.ID, "", ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: status=%d", response.Code)
+	}
+	// photo now belongs to someone else
+	env.repo.owner = uuid.New()
+	if response := tripRequest(env.handler, "GET", "/api/photos/"+completed.ID, "", "Bearer valid"); response.Code != http.StatusNotFound {
+		t.Fatalf("other owner: status=%d", response.Code)
 	}
 }
 
