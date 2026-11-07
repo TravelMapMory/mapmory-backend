@@ -23,7 +23,18 @@ The server reads **only its three configuration keys** from the repository-root 
 
 By default, the server listens at `http://localhost:8080` (override with `PORT`). Without PostgreSQL enabled, `/api/auth/me` remains available but `/api/users/me` is not registered.
 
-To enable `/api/users/me` and **authenticated persistent trips**, follow [Application-user resolution](docs/application-user-resolution.md) to start local PostgreSQL, apply migrations, and set `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` in `.env`. The server requires a working `DATABASE_URL` when this flag is enabled.
+To enable `/api/users/me` and **authenticated persistent trips**, follow [Application-user resolution](docs/application-user-resolution.md) to start local PostgreSQL, apply migrations, and set `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` in `.env`. The server requires a working `DATABASE_URL` when this flag is enabled and exits at startup if PostgreSQL is unreachable; it never falls back to memory. It does not apply migrations; run Goose yourself ([Database migrations](docs/database-migrations.md)).
+
+### PostgreSQL or in-memory?
+
+| Workflow | Needs PostgreSQL? |
+| --- | --- |
+| `go run ./cmd/server` with `MAPMORY_ENABLE_DB_USER_RESOLUTION` unset or `false` | No. `/healthz` and `/api/auth/me` work; `/api/trips` is the public in-memory prototype, lost on restart; `/api/users/me` returns `404`. |
+| `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` | Yes: migrated PostgreSQL at `DATABASE_URL`. Enables `/api/users/me` and persistent, owner-scoped `/api/trips`. |
+| `go test ./...`, `go vet ./...`, `go build ./...` | No. Tests use fakes and need neither a database nor Firebase credentials. |
+| `./scripts/test-migrations.sh`, `./scripts/test-postgres-integration.sh` | Docker and Goose, but no existing database: each starts and removes its own temporary container and ignores `DATABASE_URL`. |
+
+Every server start still needs Application Default Credentials (see Firebase setup above), even in in-memory mode.
 
 ```bash
 curl -i http://localhost:8080/healthz       # 200
