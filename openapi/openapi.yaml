@@ -246,6 +246,8 @@ paths:
           $ref: '#/components/responses/404'
         '500':
           $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
       tags:
       - Photos
   /photos/{photo_id}:
@@ -282,6 +284,8 @@ paths:
           $ref: '#/components/responses/404'
         '500':
           $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
       tags:
       - Photos
   /trips/{trip_id}/batches:

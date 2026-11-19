@@ -89,10 +89,15 @@ func DecodeCursor(value string) (Cursor, error) {
 	if err := json.Unmarshal(data, &cursor); err != nil || cursor.ID == uuid.Nil {
 		return Cursor{}, ErrInvalidCursor
 	}
+	// PostgreSQL has no year 0, so a hand-made cursor with one must be a 400
+	// rather than reaching the query and failing as a 500.
 	if cursor.CaptureTimeLocal != nil {
-		if _, err := time.Parse(CaptureTimeLayout, *cursor.CaptureTimeLocal); err != nil {
+		if t, err := time.Parse(CaptureTimeLayout, *cursor.CaptureTimeLocal); err != nil || t.Year() < 1 {
 			return Cursor{}, ErrInvalidCursor
 		}
+	}
+	if cursor.UploadedAt != nil && cursor.UploadedAt.UTC().Year() < 1 {
+		return Cursor{}, ErrInvalidCursor
 	}
 	return cursor, nil
 }

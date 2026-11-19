@@ -479,7 +479,12 @@ func TestListTripPhotosValidation(t *testing.T) {
 	}
 	badCapture := "yesterday"
 	badCursor := photos.Cursor{CaptureTimeLocal: &badCapture, ID: uuid.New()}.Encode()
-	for _, query := range []string{"?limit=0", "?limit=101", "?limit=x", "?cursor=not-a-cursor", "?cursor=" + badCursor} {
+	yearZeroCapture := "0000-01-01T00:00:00"
+	yearZeroCaptureCursor := photos.Cursor{CaptureTimeLocal: &yearZeroCapture, ID: uuid.New()}.Encode()
+	yearZeroUpload := time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC)
+	yearZeroUploadCursor := photos.Cursor{UploadedAt: &yearZeroUpload, ID: uuid.New()}.Encode()
+	for _, query := range []string{"?limit=0", "?limit=101", "?limit=x", "?cursor=not-a-cursor", "?cursor=" + badCursor,
+		"?cursor=" + yearZeroCaptureCursor, "?cursor=" + yearZeroUploadCursor} {
 		if response := tripRequest(env.handler, "GET", base+query, "", "Bearer valid"); response.Code != http.StatusBadRequest {
 			t.Fatalf("%s: status=%d", query, response.Code)
 		}
