@@ -1,27 +1,88 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/TravelMapMory/mapmory-backend/internal/appuser"
 	"github.com/TravelMapMory/mapmory-backend/internal/auth"
+	"github.com/TravelMapMory/mapmory-backend/internal/photos"
 	"github.com/TravelMapMory/mapmory-backend/internal/trips"
 	"github.com/google/uuid"
 )
 
 // persistentTripHandlers handles owner-scoped trips in database-backed mode.
 // The repository is shared across requests and must not be closed by handlers.
-type persistentTripHandlers struct{ repository trips.Repository }
+type persistentTripHandlers struct {
+	repository trips.Repository
+	// overview and sign add photo aggregates and the cover to trip responses;
+	// both are nil when photo uploads are disabled.
+	overview photos.Overview
+	sign     func(objectName string) (string, time.Time, error)
+}
 
-func tripResponse(record trips.Trip) trip {
-	return trip{ID: record.ID.String(), Title: record.Title, Notes: record.Notes,
-		CreatedAt: record.CreatedAt, PhotoCount: 0, Cover: nil}
+// tripResponse is a trip without photos: a new trip, or uploads disabled.
+func tripResponse(record trips.Trip) ownedTrip {
+	return ownedTrip{
+		trip: trip{ID: record.ID.String(), Title: record.Title, Notes: record.Notes,
+			CreatedAt: record.CreatedAt, PhotoCount: 0, Cover: nil},
+		Cities: []string{}, Countries: []string{},
+	}
+}
+
+// tripResponses adds each trip's photo aggregates and signed cover.
+func (h *persistentTripHandlers) tripResponses(ctx context.Context, owner uuid.UUID, records []trips.Trip) ([]ownedTrip, error) {
+	items := make([]ownedTrip, 0, len(records))
+	for _, record := range records {
+		items = append(items, tripResponse(record))
+	}
+	if h.overview == nil || len(records) == 0 {
+		return items, nil
+	}
+	ids := make([]uuid.UUID, len(records))
+	for i, record := range records {
+		ids[i] = record.ID
+	}
+	stats, err := h.overview.TripStats(ctx, owner, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		s := stats[records[i].ID]
+		items[i].PhotoCount, items[i].LocatedCount = s.PhotoCount, s.LocatedCount
+		items[i].StartDate, items[i].EndDate = s.StartDate, s.EndDate
+		if s.Cities != nil {
+			items[i].Cities = s.Cities
+		}
+		if s.Countries != nil {
+			items[i].Countries = s.Countries
+		}
+		if s.Cover != nil && s.Cover.DisplayObjectName != nil {
+			url, expires, err := h.sign(*s.Cover.DisplayObjectName)
+			if err != nil {
+				return nil, err
+			}
+			items[i].Cover = &tripCover{PhotoID: s.Cover.ID.String(), Image: displayImage{URL: url, ExpiresAt: expires}}
+		}
+	}
+	return items, nil
+}
+
+// writeTrip writes one trip with its aggregates.
+func (h *persistentTripHandlers) writeTrip(w http.ResponseWriter, r *http.Request, owner uuid.UUID, record trips.Trip) {
+	items, err := h.tripResponses(r.Context(), owner, []trips.Trip{record})
+	if err != nil {
+		tripStorageError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items[0])
 }
 
 func tripOwner(r *http.Request) (uuid.UUID, bool) {
@@ -45,11 +106,12 @@ func (h *persistentTripHandlers) list(w http.ResponseWriter, r *http.Request) {
 		tripStorageError(w, err)
 		return
 	}
-	items := make([]trip, 0, len(records))
-	for _, record := range records {
-		items = append(items, tripResponse(record))
+	items, err := h.tripResponses(r.Context(), owner, records)
+	if err != nil {
+		tripStorageError(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, tripPage{Items: items, NextCursor: nil})
+	writeJSON(w, http.StatusOK, ownedTripPage{Items: items, NextCursor: nil})
 }
 
 // normalizeTripTitle and normalizeTripNotes enforce the same rules for
@@ -157,7 +219,7 @@ func (h *persistentTripHandlers) get(w http.ResponseWriter, r *http.Request) {
 		tripStorageError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tripResponse(record))
+	h.writeTrip(w, r, owner, record)
 }
 
 // update applies partial changes only to a trip owned by the resolved user.
@@ -227,7 +289,7 @@ func (h *persistentTripHandlers) update(w http.ResponseWriter, r *http.Request) 
 		tripStorageError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tripResponse(record))
+	h.writeTrip(w, r, owner, record)
 }
 
 // newHandlerWithPersistentTrips registers only database-backed routes in
@@ -247,6 +309,9 @@ func newPersistentHandler(verifier auth.Verifier, resolver appuser.Resolver, rep
 		appuser.RequireIdentity(resolver, http.HandlerFunc(userMeHandler))))
 
 	handlers := &persistentTripHandlers{repository: repository}
+	if uploads != nil {
+		handlers.overview, handlers.sign = uploads.overview, uploads.store.SignDisplay
+	}
 	protected := func(next http.HandlerFunc) http.Handler {
 		return auth.RequireIdentity(verifier, appuser.RequireIdentity(resolver, next))
 	}
@@ -259,6 +324,10 @@ func newPersistentHandler(verifier auth.Verifier, resolver appuser.Resolver, rep
 		mux.Handle("GET /api/trips/{trip_id}/photos", protected(uploads.listTripPhotos))
 		mux.Handle("GET /api/photos/{photo_id}", protected(uploads.getPhoto))
 		mux.Handle("PATCH /api/photos/{photo_id}/location", protected(uploads.updatePhotoLocation))
+		if uploads.overview != nil {
+			mux.Handle("GET /api/map/photos", protected(uploads.mapPhotos))
+			mux.Handle("GET /api/me/summary", protected(uploads.summary))
+		}
 		mux.Handle("GET /api/batches/{batch_id}", protected(uploads.getBatch))
 		mux.Handle("POST /api/batches/{batch_id}/files/{client_file_id}/complete", protected(uploads.completeUpload))
 	}

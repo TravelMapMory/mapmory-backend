@@ -328,6 +328,7 @@ func newConfiguredHandler(
 		}
 		uploadRoutes = newUploadHandlers(dependencies.trips, dependencies.uploads, dependencies.photos, store)
 		uploadRoutes.places = resolver
+		uploadRoutes.overview = dependencies.overview
 		cleanup = func() {
 			_ = store.Close()
 			_ = db.Close()
