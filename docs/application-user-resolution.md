@@ -39,7 +39,7 @@ Prerequisites: Go (see `go.mod`), Docker, Goose v3.29.0 (installation in [Databa
      postgres:17
    ```
 
-   On later days, run `docker start mapmory-postgres`. Verify readiness with `docker exec mapmory-postgres pg_isready -U mapmory -d mapmory`. Use a different host port if 5432 is occupied. The local password and disabled TLS are **not** suitable for shared or production databases.
+   On later days, run `docker start mapmory-postgres`. Verify readiness with `docker exec mapmory-postgres pg_isready -U mapmory -d mapmory`. If port 5432 is occupied, publish another host port (for example `-p 127.0.0.1:55432:5432`) and use the same port in `DATABASE_URL`. The local password and disabled TLS are **not** suitable for shared or production databases.
 
 3. Set these entries in `.env`, leaving other settings intact:
 
