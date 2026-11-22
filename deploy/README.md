@@ -55,15 +55,52 @@ slow or re-run job) pushes `:<sha>` but leaves `:main` alone.
 | `MAPMORY_PHOTO_BUCKET` | `mapmory-2026-photos` | Private bucket for photo originals and display images; enables the upload and photo routes in database mode |
 
 `MAPMORY_UPLOAD_SIGNER` stays unset on the VM: the API detects `mapmory-vm` from
-the metadata server, uses it for storage and signs through the IAM Credentials API. Upload, photo, overview and sharing routes exist only in database mode, which the `cloud-init.yaml` configuration shown here **does not enable**: it does not pass `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` or `DATABASE_URL`. Merely configuring the photo bucket does not register those routes.
+the metadata server, uses it for storage and signs through the IAM Credentials API. Upload routes
+exist only in database mode.
 
-### Database-backed API and sharing (not yet enabled in this VM configuration)
+### Database mode
 
-To enable the private flow, the deployment must additionally provide `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` and a working, securely supplied `DATABASE_URL` for PostgreSQL. Apply the Goose schema through migration `00007_create_shares.sql` **before** deploying code that depends on sharing. Treat the database URL as a secret; do not commit it to `cloud-init.yaml`, CI output or image layers. Ensure that the VM can reach PostgreSQL securely and that the database is backed up.
+`update.sh` also reads the Secret Manager secret `mapmory-database-url` every
+minute. When `mapmory-vm` can read it, the API gets
+`MAPMORY_ENABLE_DB_USER_RESOLUTION=true` and that `DATABASE_URL`, through a
+root-only env file on tmpfs (`/run/mapmory/api.env`), never the command line.
+When the secret is missing or not readable (`404`/`403`), the API runs the public
+in-memory prototype, which is the state today. A failed fetch (timeout, `5xx`)
+keeps the current mode, so an outage never drops the API back to the prototype.
+The API container is recreated within a minute whenever that file changes.
 
-With a configured private bucket, the API also needs permission to upload/download objects and to issue signed URLs. Validate `MAPMORY_UPLOAD_SIGNER` or VM service-account signing permissions separately; `GEOAPIFY_API_KEY` is optional for suggested place labels and place search but must stay server-side. A correct image deployment does not itself prove these permissions.
+Turning it on, in this order ([#53](https://github.com/TravelMapMory/mapmory-backend/issues/53)):
 
-After configuration, verify with two Firebase test accounts: owner isolation, a real upload and display image, share creation, anonymous recipient access, and revocation. Newly revoked shares reject subsequent API lookups, but already issued signed GCS URLs can remain accessible until they expire. Use the isolated integration harness for rollback tests; **never** run migration rollback on the deployed database.
+1. Apply this `cloud-init.yaml` to the VM once (see *Change the host setup*). Without the secret nothing else changes.
+2. Apply the Goose migrations to the hosted database ([#42](https://github.com/TravelMapMory/mapmory-backend/issues/42)). The API never migrates.
+3. Store the connection string and let only the VM read it:
+
+   ```bash
+   gcloud services enable secretmanager.googleapis.com --project mapmory-2026
+   printf '%s' "$DATABASE_URL" | gcloud secrets create mapmory-database-url \
+     --project mapmory-2026 --replication-policy automatic --data-file -
+   gcloud secrets add-iam-policy-binding mapmory-database-url --project mapmory-2026 \
+     --member serviceAccount:mapmory-vm@mapmory-2026.iam.gserviceaccount.com \
+     --role roles/secretmanager.secretAccessor
+   ```
+
+   The VM's access scopes must include `cloud-platform`, which signing upload URLs
+   through the IAM Credentials API needs as well. Check with
+   `gcloud compute instances describe mapmory-web --zone europe-north1-a --project mapmory-2026 --format='value(serviceAccounts[0].scopes)'`.
+
+4. Check that signed-out `curl -i https://mapmory.app/api/trips` now answers `401`.
+5. Only then set the frontend's Actions variables `VITE_API_URL=https://mapmory.app`
+   and `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`,
+   `VITE_FIREBASE_APP_ID` (the web app of the project in `FIREBASE_PROJECT_ID`, with
+   `mapmory.app` in its Authorized domains), and re-run the frontend's latest `main`
+   deploy. Unset, the frontend image keeps the mock data and the demo sign-in.
+
+To go back to the prototype, unset the frontend variables and redeploy it first,
+then remove the VM's access to the secret.
+
+The Goose schema must include migration `00007_create_shares.sql` before the API runs in this mode. `GEOAPIFY_API_KEY` is optional (suggested place labels and place search) and stays server-side.
+
+After turning it on, verify with two Firebase test accounts: owner isolation, a real upload and display image, share creation, anonymous recipient access, and revocation. Newly revoked shares reject subsequent API lookups, but already issued signed GCS URLs can remain accessible until they expire. **Never** run migration rollback on the deployed database.
 
 No service-account key is needed. Token verification only fetches Google's public
 certificates, and the Firebase Admin SDK's startup credential lookup is satisfied by
@@ -81,9 +118,8 @@ gcloud iam service-accounts add-iam-policy-binding \
   --member user:<name>@aalto.fi --role roles/iam.serviceAccountTokenCreator
 ```
 
-To change a value, edit `cloud-init.yaml`, apply it as described under *Change the
-host setup*, and recreate the container (`sudo docker rm -f api`), because a
-container is only recreated when its image changes.
+To change a value, edit `cloud-init.yaml` and apply it as described under *Change the
+host setup*. The container is recreated with the new value within a minute.
 
 ## DNS (Porkbun)
 
@@ -122,9 +158,8 @@ gcloud compute instances add-metadata mapmory-web --zone europe-north1-a \
 gcloud compute instances reset mapmory-web --zone europe-north1-a --project mapmory-2026
 ```
 
-A container is only recreated when its image changes, so if you changed the
-`docker run` flags in `update.sh`, also run `sudo docker rm -f <name>` on the VM;
-the timer starts it again with the new flags within a minute.
+A container is recreated when its image or its `docker run` arguments change
+(they are stored in the `mapmory.run` label), so no `docker rm` is needed.
 
 Costs run on the free-trial credit (ends 2027-01-04): roughly €10 a month for
 the VM, IP and disk. A €30/month budget alert emails the billing admin.
