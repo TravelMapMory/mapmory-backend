@@ -288,6 +288,84 @@ paths:
           $ref: '#/components/responses/503'
       tags:
       - Photos
+  /map/photos:
+    get:
+      operationId: listMapPhotos
+      summary: The caller's located photos for the owner map
+      description: 'Processed photos with a position, newest capture first, at most
+        2,000; truncated is true when more matched (design doc 5.2). The browser clusters
+        them. Every filter is optional; an invalid filter returns 400.'
+      parameters:
+      - name: bbox
+        in: query
+        schema:
+          type: string
+        description: west,south,east,north in degrees. West greater than east crosses
+          the antimeridian.
+        example: 130,30,140,40
+      - name: trip_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: from
+        in: query
+        schema:
+          type: string
+          format: date
+        description: First capture date, inclusive.
+      - name: to
+        in: query
+        schema:
+          type: string
+          format: date
+        description: Last capture date, inclusive.
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 100
+        description: Matches place name, city, country or trip title, case-insensitively.
+      responses:
+        '200':
+          description: Map markers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MapPhotoPage'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Photos
+  /me/summary:
+    get:
+      operationId: getSummary
+      summary: Dashboard totals and recent uploads
+      description: Counts cover the caller's processed photos. Countries and cities
+        count distinct labels of located photos. to_review_count is photos needing
+        a location plus suggested labels not yet confirmed. recently_uploaded holds
+        the 8 newest uploads, newest first.
+      responses:
+        '200':
+          description: The caller's summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeSummary'
+        '401':
+          $ref: '#/components/responses/401'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Photos
   /photos/{photo_id}/location:
     parameters:
     - name: photo_id
@@ -775,6 +853,11 @@ components:
       - created_at
       - photo_count
       - cover
+      - located_count
+      - cities
+      - countries
+      - start_date
+      - end_date
       properties:
         id:
           type: string
@@ -791,6 +874,34 @@ components:
           minimum: 0
         cover:
           $ref: '#/components/schemas/TripCover'
+          description: The first processed photo in capture order; null for a trip
+            without processed photos.
+        located_count:
+          type: integer
+          minimum: 0
+          description: Processed photos with a position, the ones the map can show.
+        cities:
+          type: array
+          items:
+            type: string
+          description: Distinct city labels of located photos, in the order first photographed.
+        countries:
+          type: array
+          items:
+            type: string
+        start_date:
+          type:
+          - string
+          - 'null'
+          format: date
+          description: First capture date; null when no photo has a capture time.
+        end_date:
+          type:
+          - string
+          - 'null'
+          format: date
+      description: photo_count and the other aggregates cover processed photos (ready
+        or needs-location) only.
       title: Trip
     DisplayImage:
       type: object
@@ -1150,6 +1261,92 @@ components:
       - unsupported_type
       - file_too_large
       title: UploadRejectionCode
+    MapPhoto:
+      type: object
+      required:
+      - id
+      - trip_id
+      - trip_title
+      - lat
+      - lng
+      - display_image
+      - capture_time_local
+      - city
+      - country
+      - place_name
+      properties:
+        id:
+          type: string
+          format: uuid
+        trip_id:
+          type: string
+          format: uuid
+        trip_title:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+        display_image:
+          $ref: '#/components/schemas/NullableDisplayImage'
+        capture_time_local:
+          type:
+          - string
+          - 'null'
+        city:
+          type:
+          - string
+          - 'null'
+        country:
+          type:
+          - string
+          - 'null'
+        place_name:
+          type:
+          - string
+          - 'null'
+      title: MapPhoto
+    MapPhotoPage:
+      type: object
+      required:
+      - items
+      - truncated
+      properties:
+        items:
+          type: array
+          maxItems: 2000
+          items:
+            $ref: '#/components/schemas/MapPhoto'
+        truncated:
+          type: boolean
+      title: MapPhotoPage
+    MeSummary:
+      type: object
+      required:
+      - photo_count
+      - country_count
+      - city_count
+      - to_review_count
+      - recently_uploaded
+      properties:
+        photo_count:
+          type: integer
+          minimum: 0
+        country_count:
+          type: integer
+          minimum: 0
+        city_count:
+          type: integer
+          minimum: 0
+        to_review_count:
+          type: integer
+          minimum: 0
+        recently_uploaded:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/Photo'
+      title: MeSummary
     LabelStatus:
       type: string
       enum:

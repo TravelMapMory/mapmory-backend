@@ -34,6 +34,9 @@ type uploadHandlers struct {
 	// places resolves labels for processed and corrected photos; nil leaves
 	// labels pending (no Geoapify key configured).
 	places *place.Resolver
+	// overview serves trip aggregates, the owner map and the Dashboard
+	// summary; nil hides those routes.
+	overview photos.Overview
 }
 
 func newUploadHandlers(tripRepo trips.Repository, batches uploads.Repository, photoRepo photos.Repository, store photostorage.Store) *uploadHandlers {
