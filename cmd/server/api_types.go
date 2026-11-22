@@ -53,6 +53,11 @@ type apiPhoto struct {
 	Lat              *float64      `json:"lat"`
 	Lng              *float64      `json:"lng"`
 	DisplayImage     *displayImage `json:"display_image"`
+	Country          *string       `json:"country"`
+	City             *string       `json:"city"`
+	PlaceName        *string       `json:"place_name"`
+	LabelStatus      string        `json:"label_status"`
+	LabelAttribution *string       `json:"label_attribution"`
 }
 
 type photoPage struct {

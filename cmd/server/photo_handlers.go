@@ -42,6 +42,14 @@ func (h *uploadHandlers) photoResponse(photo photos.Photo) (apiPhoto, error) {
 		ExifLng:          photo.ExifLng,
 		Lat:              photo.Lat,
 		Lng:              photo.Lng,
+		Country:          photo.Country,
+		City:             photo.City,
+		PlaceName:        photo.PlaceName,
+		LabelStatus:      photo.LabelStatus,
+		LabelAttribution: photo.LabelAttribution,
+	}
+	if response.LabelStatus == "" {
+		response.LabelStatus = photos.LabelPending
 	}
 	if photo.DisplayObjectName != nil {
 		url, expires, err := h.store.SignDisplay(*photo.DisplayObjectName)
@@ -215,7 +223,7 @@ func (h *uploadHandlers) process(w http.ResponseWriter, r *http.Request, photo p
 		uploadInternalError(w, "photo result record", err)
 		return
 	}
-	h.writePhoto(w, processed)
+	h.writePhoto(w, h.suggestLabels(persist, processed))
 }
 
 // getBatch restores upload status after a reload (contract getBatch).

@@ -257,6 +257,26 @@ BEGIN
         exif_lat = 60.18, exif_lng = 24.82, lat = 60.18, lng = 24.82
     WHERE client_file_id = 'file-1';
 
+    -- Place labels: a known status, and labels only on a photo with a position.
+    BEGIN
+        UPDATE photos SET label_status = 'guessed' WHERE client_file_id = 'file-1';
+
+        RAISE EXCEPTION 'Unknown label_status was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    BEGIN
+        UPDATE photos SET lat = NULL, lng = NULL, city = 'Helsinki' WHERE client_file_id = 'file-1';
+
+        RAISE EXCEPTION 'Place label without coordinates was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    UPDATE photos SET city = 'Helsinki', country = 'Finland', label_status = 'suggested'
+    WHERE client_file_id = 'file-1';
+
     -- Prevent deleting a trip that still has photos.
     BEGIN
         DELETE FROM trips WHERE id = trip_id;

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -242,4 +243,66 @@ func TestReverseGeocodeNetworkError(t *testing.T) {
 
 	_, err = c.ReverseGeocode(context.Background(), 60.17, 24.94)
 	checkErr(t, err, place.ErrTransient)
+}
+
+// kyotoSearchBody is a forward-geocoding reply (format=json) with a city, a
+// country, a venue that must be dropped and a duplicate city.
+const kyotoSearchBody = `{"results":[
+	{"result_type":"city","place_id":"p1","city":"Kyoto","country":"Japan","lat":35.0116,"lon":135.7681},
+	{"result_type":"amenity","place_id":"p2","name":"Kyoto Station","city":"Kyoto","country":"Japan","lat":34.98,"lon":135.75},
+	{"result_type":"country","place_id":"p3","country":"Japan","lat":36.57,"lon":139.24},
+	{"result_type":"city","place_id":"p1","city":"Kyoto","country":"Japan","lat":35.0116,"lon":135.7681},
+	{"result_type":"city","place_id":"p4","name":"Kyōtanabe","country":"Japan","lat":34.81,"lon":135.77}]}`
+
+func TestSearchKeepsCitiesAndCountries(t *testing.T) {
+	var gotQuery url.Values
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/geocode/search" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		gotQuery = r.URL.Query()
+		_, _ = w.Write([]byte(kyotoSearchBody))
+	}, 0)
+
+	got, err := c.Search(context.Background(), "Kyoto", 8)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if gotQuery.Get("text") != "Kyoto" || gotQuery.Get("apiKey") != testKey || gotQuery.Get("format") != "json" {
+		t.Fatalf("query = %v", gotQuery)
+	}
+	if len(got) != 3 {
+		t.Fatalf("candidates = %+v", got)
+	}
+	if got[0].Kind != place.KindCity || got[0].Label != "Kyoto, Japan" || got[0].Lng != 135.7681 || got[0].ID != "p1" {
+		t.Fatalf("city = %+v", got[0])
+	}
+	if got[1].Kind != place.KindCountry || got[1].Name != "Japan" || got[1].City != "" {
+		t.Fatalf("country = %+v", got[1])
+	}
+	// A city reported only by name still counts.
+	if got[2].City != "Kyōtanabe" || got[2].Label != "Kyōtanabe, Japan" {
+		t.Fatalf("named city = %+v", got[2])
+	}
+}
+
+func TestSearchLimitEmptyAndErrors(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(kyotoSearchBody)) }, 0)
+	if got, err := c.Search(context.Background(), "Kyoto", 1); err != nil || len(got) != 1 {
+		t.Fatalf("limit 1: %+v %v", got, err)
+	}
+
+	empty := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"results":[]}`)) }, 0)
+	if got, err := empty.Search(context.Background(), "Nowhere", 8); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("no match must be an empty slice: %+v %v", got, err)
+	}
+
+	for status, want := range map[int]error{http.StatusTooManyRequests: place.ErrTransient, http.StatusUnauthorized: place.ErrPermanent} {
+		failing := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }, 0)
+		_, err := failing.Search(context.Background(), "Kyoto", 8)
+		checkErr(t, err, want)
+	}
+	broken := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{`)) }, 0)
+	_, err := broken.Search(context.Background(), "Kyoto", 8)
+	checkErr(t, err, place.ErrPermanent)
 }

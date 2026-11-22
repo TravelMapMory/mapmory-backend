@@ -27,7 +27,8 @@ const photoColumns = `
 	p.id, p.trip_id, p.batch_id, p.client_file_id, p.state, p.error_code,
 	p.object_name, p.content_type, p.size_bytes, p.uploaded_at, p.processing_started_at,
 	p.capture_time_local, p.capture_utc_offset, p.exif_lat, p.exif_lng, p.lat, p.lng,
-	p.display_object_name, p.created_at`
+	p.display_object_name, p.created_at,
+	p.country, p.city, p.place_name, p.label_status, p.label_provider, p.label_attribution`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -41,6 +42,7 @@ func scanPhoto(row rowScanner) (Photo, error) {
 		&photo.ObjectName, &photo.ContentType, &photo.SizeBytes, &photo.UploadedAt, &photo.ProcessingStarted,
 		&captureTime, &photo.CaptureUTCOffset, &photo.ExifLat, &photo.ExifLng, &photo.Lat, &photo.Lng,
 		&photo.DisplayObjectName, &photo.CreatedAt,
+		&photo.Country, &photo.City, &photo.PlaceName, &photo.LabelStatus, &photo.LabelProvider, &photo.LabelAttribution,
 	)
 	if err != nil {
 		return Photo{}, err
@@ -219,4 +221,79 @@ func (r *PostgresRepository) queryPhotos(ctx context.Context, query string, args
 		photos = append(photos, photo)
 	}
 	return photos, rows.Err()
+}
+
+// nullIfEmpty stores an empty label as NULL, which the API reports as null.
+func nullIfEmpty(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func (r *PostgresRepository) SuggestLabels(ctx context.Context, photoID uuid.UUID, lat, lng float64, labels Labels) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE photos SET country = $4, city = $5, place_name = $6,
+			label_status = 'suggested', label_provider = $7, label_attribution = $8
+		WHERE id = $1 AND lat = $2 AND lng = $3 AND label_status <> 'confirmed'
+	`, photoID, lat, lng, nullIfEmpty(labels.Country), nullIfEmpty(labels.City), nullIfEmpty(labels.PlaceName),
+		nullIfEmpty(labels.Provider), nullIfEmpty(labels.Attribution))
+	if err != nil {
+		return false, fmt.Errorf("suggest photo labels: %w", err)
+	}
+	stored, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("suggest photo labels: %w", err)
+	}
+	return stored == 1, nil
+}
+
+func (r *PostgresRepository) Relocate(ctx context.Context, ownerID, photoID uuid.UUID, lat, lng float64, labels *Labels) (Photo, error) {
+	status := LabelPending
+	var set Labels
+	if labels != nil {
+		status, set = LabelConfirmed, *labels
+	}
+	photo, err := scanPhoto(r.db.QueryRowContext(ctx, `
+		UPDATE photos p SET state = 'ready', lat = $3, lng = $4,
+			country = $5, city = $6, place_name = $7, label_status = $8,
+			label_provider = $9, label_attribution = $10
+		FROM trips t
+		WHERE p.id = $1 AND t.id = p.trip_id AND t.owner_id = $2
+		  AND p.state IN ('ready', 'needs-location')
+		RETURNING `+photoColumns,
+		photoID, ownerID, lat, lng, nullIfEmpty(set.Country), nullIfEmpty(set.City), nullIfEmpty(set.PlaceName),
+		status, nullIfEmpty(set.Provider), nullIfEmpty(set.Attribution)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Photo{}, r.explainMiss(ctx, ownerID, photoID, ErrNotProcessed)
+	}
+	if err != nil {
+		return Photo{}, fmt.Errorf("relocate photo: %w", err)
+	}
+	return photo, nil
+}
+
+func (r *PostgresRepository) ConfirmLabels(ctx context.Context, ownerID, photoID uuid.UUID) (Photo, error) {
+	photo, err := scanPhoto(r.db.QueryRowContext(ctx, `
+		UPDATE photos p SET label_status = 'confirmed'
+		FROM trips t
+		WHERE p.id = $1 AND t.id = p.trip_id AND t.owner_id = $2 AND p.label_status = 'suggested'
+		RETURNING `+photoColumns,
+		photoID, ownerID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Photo{}, r.explainMiss(ctx, ownerID, photoID, ErrNoSuggestion)
+	}
+	if err != nil {
+		return Photo{}, fmt.Errorf("confirm photo labels: %w", err)
+	}
+	return photo, nil
+}
+
+// explainMiss tells an absent or foreign photo (ErrNotFound) apart from one
+// the caller owns but whose current state refused the update (conflict).
+func (r *PostgresRepository) explainMiss(ctx context.Context, ownerID, photoID uuid.UUID, conflict error) error {
+	if _, err := r.Get(ctx, ownerID, photoID); err != nil {
+		return err
+	}
+	return conflict
 }
