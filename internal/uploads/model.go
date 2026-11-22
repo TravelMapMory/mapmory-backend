@@ -54,3 +54,9 @@ func NormalizeContentType(value string) string {
 func ObjectName(tripID, photoID uuid.UUID) string {
 	return "originals/" + tripID.String() + "/" + photoID.String()
 }
+
+// DisplayObjectName is the private GCS object that holds a photo's EXIF-free
+// display JPEG. It sits next to, and never replaces, the original.
+func DisplayObjectName(tripID, photoID uuid.UUID) string {
+	return "display/" + tripID.String() + "/" + photoID.String() + ".jpg"
+}

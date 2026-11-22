@@ -162,6 +162,7 @@ Content-Type: application/json
 }
 
 ### Register uploads for the trip created above (201)
+# @name registerBatch
 # Database mode with MAPMORY_PHOTO_BUCKET set. "b" is rejected per file.
 # PUT the image bytes to accepted_files[].upload.url with the returned headers.
 POST {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}/batches
@@ -174,3 +175,15 @@ Content-Type: application/json
     {"client_file_id": "b", "size_bytes": 10, "content_type": "image/heic"}
   ]
 }
+
+### Process file "a" after its PUT to GCS (200; 409 upload_missing before the PUT)
+POST {{baseUrl}}/api/batches/{{registerBatch.response.body.$.batch_id}}/files/a/complete
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+
+### Batch status after a reload (200)
+GET {{baseUrl}}/api/batches/{{registerBatch.response.body.$.batch_id}}
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}
+
+### Photos of the trip created above, newest upload first (200)
+GET {{baseUrl}}/api/trips/{{createTrip.response.body.$.id}}/photos?limit=20
+Authorization: Bearer {{$dotenv FIREBASE_ID_TOKEN}}

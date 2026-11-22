@@ -2,7 +2,7 @@
 
 See also the [README](../README.md) and [photo metadata inspection](photo-metadata.md).
 
-`internal/photoproc` is the standalone component behind the EXIF extraction and display-image work in [backend #22](https://github.com/TravelMapMory/mapmory-backend/issues/22). It works on bytes already in memory, so it needs no HTTP server, cloud credentials, database or geocoder, and it is not called by any endpoint yet. Reading the uploaded object from Google Cloud Storage, saving the `Photo` record and wiring this into upload completion belong to [#12](https://github.com/TravelMapMory/mapmory-backend/issues/12), [#21](https://github.com/TravelMapMory/mapmory-backend/issues/21) and [#23](https://github.com/TravelMapMory/mapmory-backend/issues/23).
+`internal/photoproc` is the standalone component behind the EXIF extraction and display-image work in [backend #22](https://github.com/TravelMapMory/mapmory-backend/issues/22). It works on bytes already in memory, so it needs no HTTP server, cloud credentials, database or geocoder. `POST /api/batches/{batch_id}/files/{client_file_id}/complete` (`cmd/server/photo_handlers.go`) reads the uploaded object from Google Cloud Storage, runs it through this package behind a semaphore of size 1, stores the display image at `display/{trip_id}/{photo_id}.jpg` and saves the result on the `photos` row.
 
 ### Entry points
 
