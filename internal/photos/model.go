@@ -21,12 +21,28 @@ const (
 	StateFailed        = "failed"
 )
 
+// Place-label states; see LabelStatus in the OpenAPI contract. They change
+// independently of the photo state, so a geocoding failure never blocks a photo.
+const (
+	LabelPending   = "pending"
+	LabelSuggested = "suggested"
+	LabelConfirmed = "confirmed"
+)
+
 // CaptureTimeLayout is the wall-clock format of capture_time_local.
 const CaptureTimeLayout = "2006-01-02T15:04:05"
 
 // ErrNotFound is returned when a photo, batch or trip is absent or not owned
 // by the caller. The two cases are deliberately indistinguishable.
 var ErrNotFound = errors.New("photo not found")
+
+// ErrNotProcessed is returned when a location change targets a photo that is
+// still uploading or processing, or that failed.
+var ErrNotProcessed = errors.New("photo is not processed")
+
+// ErrNoSuggestion is returned when an owner confirms labels that are not in
+// the suggested state.
+var ErrNoSuggestion = errors.New("photo has no suggested labels")
 
 // Photo is one persisted photo. Pointer fields are NULL when unknown.
 type Photo struct {
@@ -49,6 +65,22 @@ type Photo struct {
 	Lng               *float64
 	DisplayObjectName *string
 	CreatedAt         time.Time
+	Country           *string
+	City              *string
+	PlaceName         *string
+	LabelStatus       string
+	LabelProvider     *string
+	LabelAttribution  *string
+}
+
+// Labels are normalized place labels and the credit their provider requires.
+// Empty strings are stored as NULL.
+type Labels struct {
+	Country     string
+	City        string
+	PlaceName   string
+	Provider    string
+	Attribution string
 }
 
 // Processed is the successful outcome of processing one upload.
@@ -130,4 +162,16 @@ type Repository interface {
 	// upload time oldest first, then ID. Undated and never-uploaded photos
 	// sort last. It returns ErrNotFound for a trip the caller lacks.
 	ListByTrip(ctx context.Context, ownerID, tripID uuid.UUID, after *Cursor, limit int) ([]Photo, error)
+	// SuggestLabels stores resolver labels for a photo whose position is still
+	// lat, lng and whose labels are not confirmed. It reports whether it
+	// stored them, so a correction made meanwhile is never overwritten.
+	SuggestLabels(ctx context.Context, photoID uuid.UUID, lat, lng float64, labels Labels) (bool, error)
+	// Relocate sets the caller's processed photo to lat, lng (never touching
+	// the EXIF pair or capture time) and makes it ready. With labels the owner's
+	// choice is confirmed; without them, labels are cleared and pending.
+	// It returns ErrNotFound or ErrNotProcessed.
+	Relocate(ctx context.Context, ownerID, photoID uuid.UUID, lat, lng float64, labels *Labels) (Photo, error)
+	// ConfirmLabels accepts the caller's suggested labels. It returns
+	// ErrNotFound or ErrNoSuggestion.
+	ConfirmLabels(ctx context.Context, ownerID, photoID uuid.UUID) (Photo, error)
 }

@@ -19,7 +19,7 @@ chmod 600 .env
 go run ./cmd/server
 ```
 
-The server reads **only its five configuration keys** from the repository-root `.env`: `FIREBASE_PROJECT_ID`, `MAPMORY_ENABLE_DB_USER_RESOLUTION`, `DATABASE_URL`, `MAPMORY_PHOTO_BUCKET`, and `MAPMORY_UPLOAD_SIGNER`. Explicitly exported environment variables override the file, and a missing `.env` is fine when configuration is supplied by the deployment environment. `.env` is ignored by Git. The Firebase test token helper also uses `.env`, but the backend does not import test passwords or tokens into its environment.
+The server reads **only its six configuration keys** from the repository-root `.env`: `FIREBASE_PROJECT_ID`, `MAPMORY_ENABLE_DB_USER_RESOLUTION`, `DATABASE_URL`, `MAPMORY_PHOTO_BUCKET`, `MAPMORY_UPLOAD_SIGNER`, and `GEOAPIFY_API_KEY`. Explicitly exported environment variables override the file, and a missing `.env` is fine when configuration is supplied by the deployment environment. `.env` is ignored by Git. The Firebase test token helper also uses `.env`, but the backend does not import test passwords or tokens into its environment.
 
 By default, the server listens at `http://localhost:8080` (override with `PORT`). Without PostgreSQL enabled, `/api/auth/me` remains available but `/api/users/me` is not registered.
 
@@ -52,11 +52,13 @@ For a real Firebase ID token, use [Firebase authentication testing](docs/firebas
 | `GET /api/users/me` | Opt-in: resolves Firebase UID to PostgreSQL user UUID; creates a user if missing |
 | `GET /api/trips`, `POST /api/trips`, `GET /api/trips/{trip_id}` | Database mode: Firebase-authenticated, owner-scoped PostgreSQL trips; legacy mode: public in-memory prototype |
 | Photo metadata and display-image processing | Libraries and local tools only |
-| Geoapify place resolution | Library only |
+| Place labels on upload | Database mode with `GEOAPIFY_API_KEY`: a processed photo with GPS gets suggested country, city and place labels; without the key, or when Geoapify fails, labels stay `pending` and the photo is unaffected |
 | `POST /api/trips/{trip_id}/batches` | Database mode with `MAPMORY_PHOTO_BUCKET`: registers JPEG/PNG files as pending photos and returns signed GCS `PUT` URLs |
 | `POST /api/batches/{batch_id}/files/{client_file_id}/complete` | Same mode: checks the uploaded object, extracts EXIF, stores an EXIF-free display JPEG and returns the photo |
 | `GET /api/batches/{batch_id}`, `GET /api/trips/{trip_id}/photos`, `GET /api/photos/{photo_id}` | Same mode: owner-only batch status, photo list in capture order (cursor-paginated) and single photo, with signed display-image URLs |
-| Sharing, place labels and location correction | Not implemented |
+| `PATCH /api/photos/{photo_id}/location` | Upload mode: owner corrects a photo's position (labels resolved and confirmed; EXIF and capture time unchanged) or confirms suggested labels |
+| `GET /api/places/search?q=` | Database mode, public and rate-limited: world cities and countries for Find a place and corrections; `503` without `GEOAPIFY_API_KEY` |
+| Sharing, owner map and Dashboard summary | Not implemented |
 
 **Security:** Enable `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` to use protected, persistent trip routes. When disabled, trips are **public, shared in memory and lost on restart**; never use the prototype for private information. See [Trip persistence](docs/trip-persistence.md) for ownership and remaining limitations. The OpenAPI document also contains unimplemented proposed endpoints.
 

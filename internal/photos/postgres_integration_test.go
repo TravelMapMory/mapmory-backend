@@ -284,3 +284,95 @@ func TestGetIntegration(t *testing.T) {
 		t.Fatalf("unknown photo: err=%v", err)
 	}
 }
+
+// processedPhoto inserts a photo already in state with an optional position.
+func (f fixture) processedPhoto(t *testing.T, state string, lat, lng *float64) uuid.UUID {
+	t.Helper()
+	id := f.addPhoto(t, uuid.NewString(), nil)
+	if _, err := f.db.ExecContext(testContext(t), `
+		UPDATE photos SET state = $2, uploaded_at = now(), display_object_name = $3,
+			exif_lat = $4, exif_lng = $5, lat = $4, lng = $5
+		WHERE id = $1
+	`, id, state, "display/"+id.String()+".jpg", lat, lng); err != nil {
+		t.Fatalf("mark processed: %v", err)
+	}
+	return id
+}
+
+func TestPlaceLabelsIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	f := newFixture(t, db)
+	repo := NewPostgresRepository(db)
+	ctx := testContext(t)
+	lat, lng := 34.967, 135.773
+	id := f.processedPhoto(t, StateReady, &lat, &lng)
+	kyoto := Labels{Country: "Japan", City: "Kyoto", PlaceName: "Fushimi Inari Taisha", Provider: "geoapify", Attribution: "Powered by Geoapify"}
+
+	photo, err := repo.Get(ctx, f.owner, id)
+	if err != nil || photo.LabelStatus != LabelPending || photo.City != nil {
+		t.Fatalf("new photo labels: %+v, %v", photo, err)
+	}
+	if _, err := repo.ConfirmLabels(ctx, f.owner, id); !errors.Is(err, ErrNoSuggestion) {
+		t.Fatalf("confirm without suggestion: err=%v", err)
+	}
+
+	// A suggestion for a stale position is ignored.
+	if stored, err := repo.SuggestLabels(ctx, id, 1, 2, kyoto); stored || err != nil {
+		t.Fatalf("stale suggestion: %v, %v", stored, err)
+	}
+	if stored, err := repo.SuggestLabels(ctx, id, lat, lng, kyoto); !stored || err != nil {
+		t.Fatalf("suggest: %v, %v", stored, err)
+	}
+	photo, _ = repo.Get(ctx, f.owner, id)
+	if photo.LabelStatus != LabelSuggested || *photo.City != "Kyoto" || *photo.LabelProvider != "geoapify" {
+		t.Fatalf("suggested: %+v", photo)
+	}
+
+	if _, err := repo.ConfirmLabels(ctx, uuid.New(), id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stranger confirm: err=%v", err)
+	}
+	photo, err = repo.ConfirmLabels(ctx, f.owner, id)
+	if err != nil || photo.LabelStatus != LabelConfirmed {
+		t.Fatalf("confirm: %+v, %v", photo, err)
+	}
+	if stored, _ := repo.SuggestLabels(ctx, id, lat, lng, Labels{City: "Osaka"}); stored {
+		t.Fatal("a suggestion overwrote confirmed labels")
+	}
+}
+
+func TestRelocateIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	f := newFixture(t, db)
+	repo := NewPostgresRepository(db)
+	ctx := testContext(t)
+	exifLat, exifLng := 60.18, 24.93
+	located := f.processedPhoto(t, StateReady, &exifLat, &exifLng)
+	unlocated := f.processedPhoto(t, StateNeedsLocation, nil, nil)
+	pending := f.addPhoto(t, "pending", nil)
+
+	photo, err := repo.Relocate(ctx, f.owner, unlocated, 35.0, 135.7, &Labels{City: "Kyoto", Country: "Japan", Provider: "geoapify"})
+	if err != nil || photo.State != StateReady || *photo.Lat != 35.0 || photo.ExifLat != nil ||
+		photo.LabelStatus != LabelConfirmed || *photo.City != "Kyoto" || photo.PlaceName != nil {
+		t.Fatalf("relocate unlocated: %+v, %v", photo, err)
+	}
+
+	// Without labels the position still saves; labels are cleared and pending.
+	photo, err = repo.Relocate(ctx, f.owner, located, 1.5, 2.5, nil)
+	if err != nil || *photo.Lat != 1.5 || *photo.ExifLat != exifLat || *photo.ExifLng != exifLng ||
+		photo.LabelStatus != LabelPending || photo.City != nil {
+		t.Fatalf("relocate located: %+v, %v", photo, err)
+	}
+
+	if _, err := repo.Relocate(ctx, f.owner, pending, 1, 2, nil); !errors.Is(err, ErrNotProcessed) {
+		t.Fatalf("pending photo: err=%v", err)
+	}
+	if _, err := repo.Relocate(ctx, uuid.New(), located, 1, 2, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stranger: err=%v", err)
+	}
+	if _, err := repo.Relocate(ctx, f.owner, uuid.New(), 1, 2, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing photo: err=%v", err)
+	}
+	if photo, _ := repo.Get(ctx, f.owner, located); *photo.Lat != 1.5 {
+		t.Fatalf("a stranger's request changed the photo: %+v", photo)
+	}
+}
