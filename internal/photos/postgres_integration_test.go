@@ -185,30 +185,49 @@ func TestGetBatchIntegration(t *testing.T) {
 	}
 }
 
+// setCaptureTime stores a camera-local capture time on a photo
+func (f fixture) setCaptureTime(t *testing.T, id uuid.UUID, local string) {
+	t.Helper()
+	if _, err := f.db.ExecContext(testContext(t),
+		"UPDATE photos SET capture_time_local = $2::timestamp WHERE id = $1", id, local); err != nil {
+		t.Fatalf("set capture time: %v", err)
+	}
+}
+
+// byID orders two IDs the way PostgreSQL orders UUIDs
+func byID(a, b uuid.UUID) (uuid.UUID, uuid.UUID) {
+	if a.String() > b.String() {
+		return b, a
+	}
+	return a, b
+}
+
 func TestListByTripPaginationIntegration(t *testing.T) {
 	db := openIntegrationDB(t)
 	f := newFixture(t, db)
 	repo := NewPostgresRepository(db)
 	base := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	at := func(minutes int) *time.Time {
+		value := base.Add(time.Duration(minutes) * time.Minute)
+		return &value
+	}
 
-	// Two photos share an upload time to exercise the ID tie-breaker.
-	var want []uuid.UUID
-	times := []time.Time{base, base.Add(time.Minute), base.Add(time.Minute), base.Add(2 * time.Minute)}
-	ids := make([]uuid.UUID, len(times))
-	for i, at := range times {
-		at := at
-		ids[i] = f.addPhoto(t, string(rune('a'+i)), &at)
-	}
-	tied := []uuid.UUID{ids[1], ids[2]}
-	if tied[0].String() < tied[1].String() {
-		tied[0], tied[1] = tied[1], tied[0]
-	}
-	want = append(want, ids[3], tied[0], tied[1], ids[0])
-	pendingA, pendingB := f.addPhoto(t, "p1", nil), f.addPhoto(t, "p2", nil)
-	if pendingA.String() < pendingB.String() {
-		pendingA, pendingB = pendingB, pendingA
-	}
-	want = append(want, pendingA, pendingB)
+	// capture time decides, even against upload order
+	late := f.addPhoto(t, "late", at(0))
+	f.setCaptureTime(t, late, "2026-07-02T08:00:00")
+	early := f.addPhoto(t, "early", at(9))
+	f.setCaptureTime(t, early, "2026-07-01T08:00:00")
+	// equal capture times: the earlier upload first, then the lower ID
+	tieUpload := f.addPhoto(t, "tie-upload", at(5))
+	f.setCaptureTime(t, tieUpload, "2026-07-01T12:00:00")
+	tieA, tieB := f.addPhoto(t, "tie-a", at(1)), f.addPhoto(t, "tie-b", at(1))
+	f.setCaptureTime(t, tieA, "2026-07-01T12:00:00")
+	f.setCaptureTime(t, tieB, "2026-07-01T12:00:00")
+	tieA, tieB = byID(tieA, tieB)
+	// undated photos come last, then photos that were never uploaded
+	undated := f.addPhoto(t, "undated", at(2))
+	pendingA, pendingB := byID(f.addPhoto(t, "p1", nil), f.addPhoto(t, "p2", nil))
+	want := []uuid.UUID{early, tieA, tieB, tieUpload, late, undated, pendingA, pendingB}
 
 	var got []uuid.UUID
 	var cursor *Cursor
@@ -241,5 +260,27 @@ func TestListByTripPaginationIntegration(t *testing.T) {
 
 	if _, err := repo.ListByTrip(testContext(t), uuid.New(), f.tripID, nil, 10); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other owner: err=%v", err)
+	}
+}
+
+// getPhoto returns one of the caller's photos (contract getPhoto)
+func TestGetIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	f := newFixture(t, db)
+	repo := NewPostgresRepository(db)
+	id := f.addPhoto(t, "a", nil)
+	f.setCaptureTime(t, id, "2026-07-01T12:00:00")
+	photo, err := repo.Get(testContext(t), f.owner, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if photo.ID != id || photo.TripID != f.tripID || photo.CaptureTimeLocal == nil || *photo.CaptureTimeLocal != "2026-07-01T12:00:00" {
+		t.Fatalf("photo = %+v", photo)
+	}
+	if _, err := repo.Get(testContext(t), uuid.New(), id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other owner: err=%v", err)
+	}
+	if _, err := repo.Get(testContext(t), f.owner, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown photo: err=%v", err)
 	}
 }
