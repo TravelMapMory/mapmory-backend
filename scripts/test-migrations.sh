@@ -104,6 +104,9 @@ run_constraints
 log "Checking repeated migration application"
 migrate up
 
+log "Rolling back share migration (00007)"
+migrate down
+
 log "Rolling back photo place-label migration (00006)"
 migrate down
 
@@ -129,7 +132,7 @@ remaining_tables="$(
     -U mapmory -d mapmory_test \
     -c "SELECT count(*) FROM pg_tables
         WHERE schemaname = 'public'
-          AND tablename IN ('users', 'trips', 'upload_batches', 'photos');"
+          AND tablename IN ('users', 'trips', 'upload_batches', 'photos', 'shares', 'share_photos');"
 )"
 
 if [[ "$remaining_tables" != "0" ]]; then

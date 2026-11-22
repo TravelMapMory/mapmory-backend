@@ -324,6 +324,15 @@ func newPersistentHandler(verifier auth.Verifier, resolver appuser.Resolver, rep
 		mux.Handle("GET /api/trips/{trip_id}/photos", protected(uploads.listTripPhotos))
 		mux.Handle("GET /api/photos/{photo_id}", protected(uploads.getPhoto))
 		mux.Handle("PATCH /api/photos/{photo_id}/location", protected(uploads.updatePhotoLocation))
+		if s := uploads.shares; s != nil {
+			mux.Handle("GET /api/trips/{trip_id}/shares", protected(s.list))
+			mux.Handle("POST /api/trips/{trip_id}/shares", protected(s.create))
+			mux.Handle("DELETE /api/shares/{share_id}", protected(s.revoke))
+			// Recipient and public views need no account (design doc 2.1).
+			mux.HandleFunc("GET /api/s/{token}", s.byToken)
+			mux.HandleFunc("GET /api/public/shares/{share_id}", s.publicShare)
+			mux.HandleFunc("GET /api/public/map", s.publicMap)
+		}
 		if uploads.overview != nil {
 			mux.Handle("GET /api/map/photos", protected(uploads.mapPhotos))
 			mux.Handle("GET /api/me/summary", protected(uploads.summary))

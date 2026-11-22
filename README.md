@@ -60,7 +60,7 @@ For a real Firebase ID token, use [Firebase authentication testing](docs/firebas
 | `GET /api/places/search?q=` | Database mode, public and rate-limited: world cities and countries for Find a place and corrections; `503` without `GEOAPIFY_API_KEY` |
 | `GET /api/map/photos`, `GET /api/me/summary` | Upload mode: owner map markers (bbox, trip, date and text filters; at most 2,000) and Dashboard totals with recent uploads |
 | Trip aggregates | Upload mode: trip responses include photo and located counts, cities, countries, date range and a signed cover |
-| Sharing | Not implemented |
+| Link and public shares | Upload mode: `GET`/`POST /api/trips/{trip_id}/shares` and `DELETE /api/shares/{share_id}` for the owner; `GET /api/s/{token}` for anyone with the link (410 once revoked); `GET /api/public/shares/{share_id}` and the clustered `GET /api/public/map` for public shares. Recipients see selected photos only, at city-centre or 0.01° positions |
 
 **Security:** Enable `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` to use protected, persistent trip routes. When disabled, trips are **public, shared in memory and lost on restart**; never use the prototype for private information. See [Trip persistence](docs/trip-persistence.md) for ownership and remaining limitations. The OpenAPI document also contains unimplemented proposed endpoints.
 
