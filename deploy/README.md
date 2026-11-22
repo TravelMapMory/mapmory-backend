@@ -77,16 +77,20 @@ Turning it on, in this order ([#53](https://github.com/TravelMapMory/mapmory-bac
 
    ```bash
    gcloud services enable secretmanager.googleapis.com --project mapmory-2026
-   printf '%s' "$DATABASE_URL" | gcloud secrets create mapmory-database-url \
-     --project mapmory-2026 --replication-policy automatic --data-file -
+   # Aalto's gcp.resourceLocations policy rejects automatic (global) replication.
+   gcloud secrets create mapmory-database-url --project mapmory-2026 \
+     --replication-policy user-managed --locations europe-north1
    gcloud secrets add-iam-policy-binding mapmory-database-url --project mapmory-2026 \
      --member serviceAccount:mapmory-vm@mapmory-2026.iam.gserviceaccount.com \
      --role roles/secretmanager.secretAccessor
+   printf '%s' "$DATABASE_URL" | gcloud secrets versions add mapmory-database-url \
+     --project mapmory-2026 --data-file -
    ```
 
-   The VM's access scopes must include `cloud-platform`, which signing upload URLs
-   through the IAM Credentials API needs as well. Check with
-   `gcloud compute instances describe mapmory-web --zone europe-north1-a --project mapmory-2026 --format='value(serviceAccounts[0].scopes)'`.
+   Done on 22 November 2026: the secret exists with no versions, `mapmory-vm` can read
+   it, and Ki Chun has `roles/secretmanager.secretVersionAdder` on it to add the URL.
+
+   The VM's access scopes must include `cloud-platform` (checked: they do).
 
 4. Check that signed-out `curl -i https://mapmory.app/api/trips` now answers `401`.
 5. Only then set the frontend's Actions variables `VITE_API_URL=https://mapmory.app`
