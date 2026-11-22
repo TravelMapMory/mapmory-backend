@@ -7,8 +7,9 @@ info:
     owner-scoped create/list/get/update trip operations implemented in PostgreSQL
     database mode. The legacy in-memory mode does not implement this full contract.
 
-    Cursor-based trip pagination, photo listing, and batch upload APIs remain
-    proposals, not implemented endpoints. Map, geocoding, sharing, deletion,
+    Batch registration (registerBatch) is implemented in database mode when a
+    photo bucket is configured. Cursor-based trip pagination, photo listing,
+    batch status and upload completion remain proposals, not implemented endpoints. Map, geocoding, sharing, deletion,
     retry routes, and upload URL renewal are outside this draft.
 
     Implemented private trip routes require a Firebase ID token; the backend

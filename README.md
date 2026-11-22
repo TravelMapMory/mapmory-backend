@@ -19,7 +19,7 @@ chmod 600 .env
 go run ./cmd/server
 ```
 
-The server reads **only its three configuration keys** from the repository-root `.env`: `FIREBASE_PROJECT_ID`, `MAPMORY_ENABLE_DB_USER_RESOLUTION`, and `DATABASE_URL`. Explicitly exported environment variables override the file, and a missing `.env` is fine when configuration is supplied by the deployment environment. `.env` is ignored by Git. The Firebase test token helper also uses `.env`, but the backend does not import test passwords or tokens into its environment.
+The server reads **only its five configuration keys** from the repository-root `.env`: `FIREBASE_PROJECT_ID`, `MAPMORY_ENABLE_DB_USER_RESOLUTION`, `DATABASE_URL`, `MAPMORY_PHOTO_BUCKET`, and `MAPMORY_UPLOAD_SIGNER`. Explicitly exported environment variables override the file, and a missing `.env` is fine when configuration is supplied by the deployment environment. `.env` is ignored by Git. The Firebase test token helper also uses `.env`, but the backend does not import test passwords or tokens into its environment.
 
 By default, the server listens at `http://localhost:8080` (override with `PORT`). Without PostgreSQL enabled, `/api/auth/me` remains available but `/api/users/me` is not registered.
 
@@ -42,7 +42,8 @@ For a real Firebase ID token, use [Firebase authentication testing](docs/firebas
 | `GET /api/trips`, `POST /api/trips`, `GET /api/trips/{trip_id}` | Database mode: Firebase-authenticated, owner-scoped PostgreSQL trips; legacy mode: public in-memory prototype |
 | Photo metadata and display-image processing | Libraries and local tools only |
 | Geoapify place resolution | Library only |
-| Photo upload and sharing | Not implemented |
+| `POST /api/trips/{trip_id}/batches` | Database mode with `MAPMORY_PHOTO_BUCKET`: registers JPEG/PNG files as pending photos and returns signed GCS `PUT` URLs |
+| Upload completion, photo listing and sharing | Not implemented |
 
 **Security:** Enable `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` to use protected, persistent trip routes. When disabled, trips are **public, shared in memory and lost on restart**; never use the prototype for private information. See [Trip persistence](docs/trip-persistence.md) for ownership and remaining limitations. The OpenAPI document also contains unimplemented proposed endpoints.
 

@@ -104,6 +104,9 @@ run_constraints
 log "Checking repeated migration application"
 migrate up
 
+log "Rolling back upload migration (00003)"
+migrate down
+
 log "Rolling back title-constraint migration (00002)"
 migrate down
 
@@ -117,15 +120,15 @@ remaining_tables="$(
     -U mapmory -d mapmory_test \
     -c "SELECT count(*) FROM pg_tables
         WHERE schemaname = 'public'
-          AND tablename IN ('users', 'trips');"
+          AND tablename IN ('users', 'trips', 'upload_batches', 'photos');"
 )"
 
 if [[ "$remaining_tables" != "0" ]]; then
-  echo "Rollback left users or trips tables behind" >&2
+  echo "Rollback left application tables behind" >&2
   exit 1
 fi
 
-log "Reapplying both migrations"
+log "Reapplying all migrations"
 migrate up
 
 log "Rerunning schema constraint tests"

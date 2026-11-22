@@ -53,7 +53,7 @@ write_files:
         docker pull -q "$REG/$app:main" >/dev/null || echo "pull failed: $app"
       done
       # The API refuses to start without its Firebase project; the ID is public, so it lives here and not in a secret store.
-      ensure api "$REG/api:main" -e FIREBASE_PROJECT_ID=mapmory-development
+      ensure api "$REG/api:main" -e FIREBASE_PROJECT_ID=mapmory-development -e MAPMORY_PHOTO_BUCKET=mapmory-2026-photos
       ensure web "$REG/web:main"
 
       # Caddy starts only once this VM is mapmory.app's sole A record (checked over DNS-over-HTTPS, COS ships no getent/dig), so Let's Encrypt never gets a request it cannot validate.

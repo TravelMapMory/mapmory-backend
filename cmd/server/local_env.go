@@ -28,6 +28,8 @@ func loadLocalEnv(path string) error {
 		"FIREBASE_PROJECT_ID":               true,
 		"MAPMORY_ENABLE_DB_USER_RESOLUTION": true,
 		"DATABASE_URL":                      true,
+		"MAPMORY_PHOTO_BUCKET":              true,
+		"MAPMORY_UPLOAD_SIGNER":             true,
 	}
 	values := make(map[string]string)
 	scanner := bufio.NewScanner(file)

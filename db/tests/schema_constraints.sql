@@ -9,6 +9,8 @@ DECLARE
     other_user_id UUID;
     actual_notes TEXT;
     actual_created_at TIMESTAMPTZ;
+    batch_id UUID := gen_random_uuid();
+    actual_state TEXT;
 BEGIN
     -- Valid user creation with database-generated defaults.
     INSERT INTO users (auth_subject, display_name)
@@ -114,6 +116,94 @@ BEGIN
         DELETE FROM users WHERE id = user_id;
 
         RAISE EXCEPTION 'Owner deletion was accepted';
+    EXCEPTION
+        WHEN foreign_key_violation THEN NULL;
+    END;
+
+    -- Upload batches must reference an existing trip.
+    BEGIN
+        INSERT INTO upload_batches (id, trip_id)
+        VALUES (gen_random_uuid(), gen_random_uuid());
+
+        RAISE EXCEPTION 'Batch for a nonexistent trip was accepted';
+    EXCEPTION
+        WHEN foreign_key_violation THEN NULL;
+    END;
+
+    INSERT INTO upload_batches (id, trip_id)
+    VALUES (batch_id, trip_id);
+
+    -- A valid photo starts pending.
+    INSERT INTO photos (id, trip_id, batch_id, client_file_id, object_name, content_type, size_bytes)
+    VALUES (gen_random_uuid(), trip_id, batch_id, 'file-1', 'originals/test/1', 'image/jpeg', 25000000)
+    RETURNING state INTO actual_state;
+
+    IF actual_state <> 'pending' THEN
+        RAISE EXCEPTION 'Unexpected default photo state: %', actual_state;
+    END IF;
+
+    -- client_file_id is unique within a batch.
+    BEGIN
+        INSERT INTO photos (id, trip_id, batch_id, client_file_id, object_name, content_type, size_bytes)
+        VALUES (gen_random_uuid(), trip_id, batch_id, 'file-1', 'originals/test/2', 'image/jpeg', 1);
+
+        RAISE EXCEPTION 'Duplicate client_file_id in a batch was accepted';
+    EXCEPTION
+        WHEN unique_violation THEN NULL;
+    END;
+
+    -- Two photos must never share a storage object.
+    BEGIN
+        INSERT INTO photos (id, trip_id, batch_id, client_file_id, object_name, content_type, size_bytes)
+        VALUES (gen_random_uuid(), trip_id, batch_id, 'file-2', 'originals/test/1', 'image/jpeg', 1);
+
+        RAISE EXCEPTION 'Duplicate object_name was accepted';
+    EXCEPTION
+        WHEN unique_violation THEN NULL;
+    END;
+
+    -- Out-of-range values are rejected.
+    BEGIN
+        INSERT INTO photos (id, trip_id, batch_id, client_file_id, object_name, content_type, size_bytes)
+        VALUES (gen_random_uuid(), trip_id, batch_id, 'file-3', 'originals/test/3', 'image/heic', 1);
+
+        RAISE EXCEPTION 'Unsupported content_type was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    BEGIN
+        INSERT INTO photos (id, trip_id, batch_id, client_file_id, object_name, content_type, size_bytes)
+        VALUES (gen_random_uuid(), trip_id, batch_id, 'file-4', 'originals/test/4', 'image/png', 25000001);
+
+        RAISE EXCEPTION 'Oversized photo was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    BEGIN
+        INSERT INTO photos (id, trip_id, batch_id, client_file_id, object_name, content_type, size_bytes, state)
+        VALUES (gen_random_uuid(), trip_id, batch_id, 'file-5', 'originals/test/5', 'image/png', 1, 'done');
+
+        RAISE EXCEPTION 'Unknown photo state was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    BEGIN
+        INSERT INTO photos (id, trip_id, batch_id, client_file_id, object_name, content_type, size_bytes)
+        VALUES (gen_random_uuid(), trip_id, batch_id, '', 'originals/test/6', 'image/png', 1);
+
+        RAISE EXCEPTION 'Empty client_file_id was accepted';
+    EXCEPTION
+        WHEN check_violation THEN NULL;
+    END;
+
+    -- Prevent deleting a trip that still has photos.
+    BEGIN
+        DELETE FROM trips WHERE id = trip_id;
+
+        RAISE EXCEPTION 'Trip deletion with photos was accepted';
     EXCEPTION
         WHEN foreign_key_violation THEN NULL;
     END;
