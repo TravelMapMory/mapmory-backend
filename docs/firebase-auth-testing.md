@@ -41,7 +41,7 @@ TEST_EMAIL=your-disposable-test-user@example.com
 TEST_PASSWORD=your-disposable-test-user-password
 ```
 
-**Security:** `TEST_PASSWORD` is stored in plaintext for a disposable test account. Never commit or share `.env`. The Go backend reads only three server configuration keys from `.env`; it does not import `TEST_PASSWORD`, `TEST_EMAIL`, `FIREBASE_WEB_API_KEY` or `FIREBASE_ID_TOKEN` into its environment.
+**Security:** `TEST_PASSWORD` is stored in plaintext for a disposable test account. Never commit or share `.env`. The Go backend reads only five server configuration keys from `.env`; it does not import `TEST_PASSWORD`, `TEST_EMAIL`, `FIREBASE_WEB_API_KEY` or `FIREBASE_ID_TOKEN` into its environment.
 
 ## 3. Sign in and obtain a Firebase ID token
 

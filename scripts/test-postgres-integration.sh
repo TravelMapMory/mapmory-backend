@@ -16,6 +16,8 @@ TEST_PACKAGES=(
   ./internal/postgres
   ./internal/users
   ./internal/trips
+  ./internal/uploads
+  ./internal/photos
   ./cmd/server
 )
 

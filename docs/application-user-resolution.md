@@ -63,7 +63,7 @@ Prerequisites: Go (see `go.mod`), Docker, Goose v3.29.0 (installation in [Databa
    go run ./cmd/server
    ```
 
-   The backend reads the three server keys from `.env` on startup. **Exported variables take precedence over `.env`**, even if the exported value is empty. Use `unset MAPMORY_ENABLE_DB_USER_RESOLUTION DATABASE_URL` if earlier shell settings are overriding the file. The backend never applies migrations automatically.
+   The backend reads the five server keys from `.env` on startup. **Exported variables take precedence over `.env`**, even if the exported value is empty. Use `unset MAPMORY_ENABLE_DB_USER_RESOLUTION DATABASE_URL` if earlier shell settings are overriding the file. The backend never applies migrations automatically.
 
 ## Verify with Firebase
 
