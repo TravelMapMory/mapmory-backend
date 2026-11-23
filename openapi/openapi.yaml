@@ -1,19 +1,43 @@
 openapi: 3.1.0
 info:
   title: MapMory — minimal private-flow draft
-  version: 0.0.7
+  version: 0.0.8
   description: |-
-    PROPOSED, pending team review. Version 0.0.7 documents authenticated,
-    owner-scoped create/list/get/update trip operations implemented in PostgreSQL
-    database mode. The legacy in-memory mode does not implement this full contract.
+    PROPOSED, pending team review. Version 0.0.8 documents the implemented
+    private trip and photo APIs, including authenticated, owner-scoped trip
+    management, photo uploads, place labels, location correction, the owner
+    map, Dashboard summaries and place search.
 
-    The upload lifecycle (registerBatch, completeUpload, getBatch), photo
-    listing (listTripPhotos) and photo retrieval (getPhoto) are implemented
-    in database mode when a photo bucket is configured. completeUpload
-    processes within the request, one image at a time. error_code is one of
-    unsupported_type, file_too_large, image_too_large or invalid_image.
-    Cursor-based trip pagination remains a proposal. Map, geocoding, sharing,
-    deletion and the failed-photo retry route are outside this draft.
+    In PostgreSQL database mode, the backend resolves Firebase identities
+    to persistent application-user UUIDs and enforces ownership on private
+    resources. The legacy in-memory mode does not implement this full
+    contract.
+
+    Photo uploads (registerBatch, completeUpload, getBatch), photo listing
+    (listTripPhotos), photo retrieval (getPhoto), location correction
+    (updatePhotoLocation), the owner map (listMapPhotos) and Dashboard summary
+    (getSummary) are available in database mode when a photo bucket is
+    configured. The backend processes each photo within its completeUpload
+    request. Processing error_code values include unsupported_type,
+    file_too_large, image_too_large and invalid_image.
+
+    Place resolution and correction:
+    - Photos retain their original EXIF coordinates separately from their
+      effective coordinates, which the owner can correct.
+    - Place labels have an independent status: pending, suggested or
+      confirmed. A photo can remain ready even when place labels are pending.
+    - When a photo has valid coordinates, the place resolver may suggest
+      country, city and place labels. Provider information and attribution
+      are retained with the labels.
+    - The owner can confirm suggested labels or provide new coordinates.
+      Successful resolution of corrected coordinates stores confirmed
+      labels. If resolution fails, the corrected coordinates are still
+      saved and the labels remain pending.
+    - Place search (searchPlaces) is public and rate-limited. Without a
+      configured geocoding provider, the endpoint returns 503.
+    - The owner map returns located photos with optional geographic,
+      trip, date and text filters. Dashboard summaries report photo
+      counts, distinct places, review counts and recent uploads.
 
     Upload recovery, as implemented:
     - completeUpload is idempotent: a processed or failed photo is returned
@@ -23,27 +47,31 @@ info:
     - A transient server failure during processing returns the photo to
       pending and 500; the client calls completeUpload again.
     - Upload URLs expire 15 minutes after registration and are not renewed.
-      While the URL is valid, the client may PUT again and complete. After it
-      expires, completeUpload either succeeds (the bytes arrived) or returns
-      409 upload_missing, and the client registers the file again in a new
-      batch, which creates a new photo.
+      While the URL is valid, the client may PUT again and complete. After
+      it expires, completeUpload either succeeds (the bytes arrived) or
+      returns 409 upload_missing, and the client registers the file again
+      in a new batch, which creates a new photo.
     - failed is final for that photo; the image itself is unusable.
 
-    Ordering (backend #45, frontend #25): listTripPhotos uses capture order.
-    The remaining #45 rules belong to endpoints not in this draft: recently
-    uploaded photos (newest upload first, then id) to GET /api/me/summary,
-    and trip date ranges that ignore missing or invalid capture times to the
-    trip representation.
+    Ordering (backend #45, frontend #25):
+    - listTripPhotos uses capture order.
+    - Recently uploaded photos are ordered by upload time, newest first,
+      with the photo ID as a tie-breaker.
+    - Trip date ranges ignore missing or invalid capture times.
+    - The owner map orders located photos by capture time, newest first,
+      and returns at most 2,000 results.
 
-    Implemented private trip routes require a Firebase ID token; the backend
-    resolves the application-user identity and enforces ownership.
+    Cursor-based trip pagination remains a proposal. Sharing, deletion
+    and the failed-photo retry route are outside this draft.
 
     Open questions:
     - How should batch registration recover from a lost response: an
       Idempotency-Key or client-generated batch ID?
-    - Is a persistent uploading state needed, and how is upload start detected?
-    - Confirm proposed pagination, photo fields, input limits and error codes
-      with the UI. Photo-list ordering follows backend #45 and frontend #25.
+    - Is a persistent uploading state needed, and how is upload start
+      detected?
+    - Confirm proposed pagination, photo fields, input limits and error
+      codes with the UI. Photo-list ordering follows backend #45 and
+      frontend #25.
   contact:
     name: MapMory team
     url: https://github.com/TravelMapMory
@@ -288,6 +316,179 @@ paths:
           $ref: '#/components/responses/503'
       tags:
       - Photos
+  /map/photos:
+    get:
+      operationId: listMapPhotos
+      summary: The caller's located photos for the owner map
+      description: 'Processed photos with a position, newest capture first, at most
+        2,000; truncated is true when more matched (design doc 5.2). The browser clusters
+        them. Every filter is optional; an invalid filter returns 400.'
+      parameters:
+      - name: bbox
+        in: query
+        schema:
+          type: string
+        description: west,south,east,north in degrees. West greater than east crosses
+          the antimeridian.
+        example: 130,30,140,40
+      - name: trip_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: from
+        in: query
+        schema:
+          type: string
+          format: date
+        description: First capture date, inclusive.
+      - name: to
+        in: query
+        schema:
+          type: string
+          format: date
+        description: Last capture date, inclusive.
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 100
+        description: Matches place name, city, country or trip title, case-insensitively.
+      responses:
+        '200':
+          description: Map markers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MapPhotoPage'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Photos
+  /me/summary:
+    get:
+      operationId: getSummary
+      summary: Dashboard totals and recent uploads
+      description: Counts cover the caller's processed photos. Countries and cities
+        count distinct labels of located photos. to_review_count is photos needing
+        a location plus suggested labels not yet confirmed. recently_uploaded holds
+        the 8 newest uploads, newest first.
+      responses:
+        '200':
+          description: The caller's summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeSummary'
+        '401':
+          $ref: '#/components/responses/401'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Photos
+  /photos/{photo_id}/location:
+    parameters:
+    - name: photo_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    patch:
+      operationId: updatePhotoLocation
+      summary: Correct a photo's location or confirm its suggested place
+      description: 'Owner only (backend #43, design doc 4.1). With lat and lng, the
+        position becomes the effective lat/lng of a ready or needs-location photo,
+        which becomes ready; exif_lat/exif_lng and the capture time never change.
+        Labels for the new position are resolved and stored as confirmed; if the
+        provider is unavailable the position is still saved and labels stay pending.
+        With confirm_label: true, suggested labels become confirmed. A photo of
+        another user returns 404. A photo still uploading or processing, or a confirm
+        without suggested labels, returns 409.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - $ref: '#/components/schemas/LocationCorrection'
+              - $ref: '#/components/schemas/ConfirmLabels'
+      responses:
+        '200':
+          description: The updated photo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Photo'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          description: 'Photo state refuses the change; error.code: photo_not_processed
+            or no_suggested_labels.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Photos
+  /places/search:
+    get:
+      operationId: searchPlaces
+      summary: Find world cities and countries by name
+      description: 'Public and rate-limited across all callers (design doc 5.2). Used
+        by Find a place and the location-correction dialog. No match returns items:
+        []; a provider failure or a server without a geocoding key returns 503
+        places_unavailable, never an empty list.'
+      security: []
+      parameters:
+      - name: q
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 2
+          maxLength: 100
+        description: Place name; trimmed, 2 to 100 characters.
+      responses:
+        '200':
+          description: Matching cities and countries, best first, at most 8
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaceSearchResult'
+        '400':
+          $ref: '#/components/responses/400'
+        '429':
+          description: 'Too many searches; retry after Retry-After seconds. error.code:
+            rate_limited.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 'Place search unavailable; error.code: places_unavailable.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      tags:
+      - Places
   /trips/{trip_id}/batches:
     parameters:
     - name: trip_id
@@ -488,6 +689,11 @@ components:
         exif_lng: 135.7681
         lat: 35.0116
         lng: 135.7681
+        country: Japan
+        city: Kyoto
+        place_name: Fushimi Inari Taisha
+        label_status: suggested
+        label_attribution: Powered by Geoapify · © OpenStreetMap contributors
         display_image:
           url: https://storage.googleapis.com/mapmory-2026-photos/display/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/0b9c6a7e-2f4d-4c1a-9e8b-1a2b3c4d5e6f.jpg?X-Goog-Signature=...
           expires_at: '2026-11-01T19:20:05Z'
@@ -507,6 +713,11 @@ components:
         exif_lng: null
         lat: null
         lng: null
+        country: null
+        city: null
+        place_name: null
+        label_status: pending
+        label_attribution: null
         display_image:
           url: https://storage.googleapis.com/mapmory-2026-photos/display/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/1c0d7b8f-3a5e-4d2b-8f9c-2b3c4d5e6f70.jpg?X-Goog-Signature=...
           expires_at: '2026-11-01T19:20:07Z'
@@ -526,6 +737,11 @@ components:
         exif_lng: null
         lat: null
         lng: null
+        country: null
+        city: null
+        place_name: null
+        label_status: pending
+        label_attribution: null
         display_image: null
     PhotoPageMixed:
       summary: One page in capture order; the undated photo and the never-uploaded
@@ -545,6 +761,11 @@ components:
           exif_lng: 135.7681
           lat: 35.0116
           lng: 135.7681
+          country: null
+          city: null
+          place_name: null
+          label_status: pending
+          label_attribution: null
           display_image:
             url: https://storage.googleapis.com/mapmory-2026-photos/display/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/0b9c6a7e-2f4d-4c1a-9e8b-1a2b3c4d5e6f.jpg?X-Goog-Signature=...
             expires_at: '2026-11-01T19:20:05Z'
@@ -561,6 +782,11 @@ components:
           exif_lng: null
           lat: null
           lng: null
+          country: null
+          city: null
+          place_name: null
+          label_status: pending
+          label_attribution: null
           display_image:
             url: https://storage.googleapis.com/mapmory-2026-photos/display/a3c1f0e2-5b6d-4e7f-8a9b-0c1d2e3f4a5b/1c0d7b8f-3a5e-4d2b-8f9c-2b3c4d5e6f70.jpg?X-Goog-Signature=...
             expires_at: '2026-11-01T19:20:07Z'
@@ -577,6 +803,11 @@ components:
           exif_lng: null
           lat: null
           lng: null
+          country: null
+          city: null
+          place_name: null
+          label_status: pending
+          label_attribution: null
           display_image: null
         next_cursor: eyJpIjoiM2UyZjlkYTEtNWM3MC00ZjRkLThiMWUtNGQ1ZTZmNzA4MTkyIn0
     RegisteredBatchMixed:
@@ -653,6 +884,11 @@ components:
       - created_at
       - photo_count
       - cover
+      - located_count
+      - cities
+      - countries
+      - start_date
+      - end_date
       properties:
         id:
           type: string
@@ -669,6 +905,34 @@ components:
           minimum: 0
         cover:
           $ref: '#/components/schemas/TripCover'
+          description: The first processed photo in capture order; null for a trip
+            without processed photos.
+        located_count:
+          type: integer
+          minimum: 0
+          description: Processed photos with a position, the ones the map can show.
+        cities:
+          type: array
+          items:
+            type: string
+          description: Distinct city labels of located photos, in the order first photographed.
+        countries:
+          type: array
+          items:
+            type: string
+        start_date:
+          type:
+          - string
+          - 'null'
+          format: date
+          description: First capture date; null when no photo has a capture time.
+        end_date:
+          type:
+          - string
+          - 'null'
+          format: date
+      description: photo_count and the other aggregates cover processed photos (ready
+        or needs-location) only.
       title: Trip
     DisplayImage:
       type: object
@@ -704,6 +968,11 @@ components:
       - lat
       - lng
       - display_image
+      - country
+      - city
+      - place_name
+      - label_status
+      - label_attribution
       properties:
         id:
           type: string
@@ -768,6 +1037,27 @@ components:
           maximum: 180
         display_image:
           $ref: '#/components/schemas/NullableDisplayImage'
+        country:
+          type:
+          - string
+          - 'null'
+          description: Place label for the effective coordinates; null until resolved.
+        city:
+          type:
+          - string
+          - 'null'
+        place_name:
+          type:
+          - string
+          - 'null'
+          description: Most specific named place, such as a venue; optional detail.
+        label_status:
+          $ref: '#/components/schemas/LabelStatus'
+        label_attribution:
+          type:
+          - string
+          - 'null'
+          description: Credit the label provider requires next to these labels.
       description: Owner representation. Both fields in each coordinate pair are set
         together or null together. EXIF coordinates are immutable after import; lat/lng
         are effective coordinates. Unknown metadata is explicitly null.
@@ -1002,6 +1292,180 @@ components:
       - unsupported_type
       - file_too_large
       title: UploadRejectionCode
+    MapPhoto:
+      type: object
+      required:
+      - id
+      - trip_id
+      - trip_title
+      - lat
+      - lng
+      - display_image
+      - capture_time_local
+      - city
+      - country
+      - place_name
+      properties:
+        id:
+          type: string
+          format: uuid
+        trip_id:
+          type: string
+          format: uuid
+        trip_title:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+        display_image:
+          $ref: '#/components/schemas/NullableDisplayImage'
+        capture_time_local:
+          type:
+          - string
+          - 'null'
+        city:
+          type:
+          - string
+          - 'null'
+        country:
+          type:
+          - string
+          - 'null'
+        place_name:
+          type:
+          - string
+          - 'null'
+      title: MapPhoto
+    MapPhotoPage:
+      type: object
+      required:
+      - items
+      - truncated
+      properties:
+        items:
+          type: array
+          maxItems: 2000
+          items:
+            $ref: '#/components/schemas/MapPhoto'
+        truncated:
+          type: boolean
+      title: MapPhotoPage
+    MeSummary:
+      type: object
+      required:
+      - photo_count
+      - country_count
+      - city_count
+      - to_review_count
+      - recently_uploaded
+      properties:
+        photo_count:
+          type: integer
+          minimum: 0
+        country_count:
+          type: integer
+          minimum: 0
+        city_count:
+          type: integer
+          minimum: 0
+        to_review_count:
+          type: integer
+          minimum: 0
+        recently_uploaded:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/Photo'
+      title: MeSummary
+    LabelStatus:
+      type: string
+      enum:
+      - pending
+      - suggested
+      - confirmed
+      description: Place-label state, independent of the photo state. pending means
+        no labels yet (no position, provider unavailable, or a correction whose lookup
+        failed); suggested means resolver labels awaiting the owner; confirmed means
+        accepted or chosen by the owner.
+      title: LabelStatus
+    LocationCorrection:
+      type: object
+      additionalProperties: false
+      required:
+      - lat
+      - lng
+      properties:
+        lat:
+          type: number
+          minimum: -90
+          maximum: 90
+        lng:
+          type: number
+          minimum: -180
+          maximum: 180
+      title: LocationCorrection
+    ConfirmLabels:
+      type: object
+      additionalProperties: false
+      required:
+      - confirm_label
+      properties:
+        confirm_label:
+          type: boolean
+          const: true
+      title: ConfirmLabels
+    Place:
+      type: object
+      required:
+      - id
+      - name
+      - label
+      - kind
+      - lat
+      - lng
+      - zoom
+      - city
+      - country
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        label:
+          type: string
+          examples:
+          - Kyoto, Japan
+        kind:
+          type: string
+          enum:
+          - city
+          - country
+        lat:
+          type: number
+        lng:
+          type: number
+        zoom:
+          type: integer
+          description: Map zoom that frames the place.
+        city:
+          type:
+          - string
+          - 'null'
+        country:
+          type: string
+      title: Place
+    PlaceSearchResult:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/Place'
+      title: PlaceSearchResult
 tags:
 - name: Trips
   description: Private trips owned by the authenticated user
@@ -1009,3 +1473,5 @@ tags:
   description: Owner photo listings
 - name: Uploads
   description: File registration, completion and status
+- name: Places
+  description: World place search

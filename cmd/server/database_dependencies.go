@@ -16,13 +16,16 @@ type databaseDependencies struct {
 	trips   trips.Repository
 	uploads uploads.Repository
 	photos  photos.Repository
+	// overview reads trip aggregates, the owner map and the Dashboard summary.
+	overview photos.Overview
 }
 
 func newDatabaseDependencies(db *sql.DB) databaseDependencies {
 	return databaseDependencies{
-		users:   users.NewRepository(db),
-		trips:   trips.NewPostgresRepository(db),
-		uploads: uploads.NewPostgresRepository(db),
-		photos:  photos.NewPostgresRepository(db),
+		users:    users.NewRepository(db),
+		trips:    trips.NewPostgresRepository(db),
+		uploads:  uploads.NewPostgresRepository(db),
+		photos:   photos.NewPostgresRepository(db),
+		overview: photos.NewPostgresRepository(db),
 	}
 }

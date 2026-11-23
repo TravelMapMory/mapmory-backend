@@ -1,6 +1,6 @@
 # Place resolution
 
-`internal/place` turns photo coordinates into normalized place labels (country, city, place name) for [backend #20](https://github.com/TravelMapMory/mapmory-backend/issues/20). It is a library: nothing in `cmd/server` calls it yet.
+`internal/place` turns photo coordinates into normalized place labels (country, city, place name) for [backend #20](https://github.com/TravelMapMory/mapmory-backend/issues/20). In database mode with `GEOAPIFY_API_KEY` set, the server resolves labels when a photo with GPS finishes processing (stored as `suggested`) and when an owner corrects a location (stored as `confirmed`). The same adapter serves `GET /api/places/search` through `place.Searcher`.
 
 - `place.Provider` is the one-method interface a geocoding vendor implements.
 - `place.Resolver` validates coordinates, calls the provider and normalizes the result into a `place.ResolvedPlace`.

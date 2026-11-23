@@ -51,6 +51,38 @@ type Provider interface {
 	ReverseGeocode(ctx context.Context, lat, lng float64) (ResolvedPlace, error)
 }
 
+// Kinds of world place a text search returns.
+const (
+	KindCity    = "city"
+	KindCountry = "country"
+)
+
+// Candidate is one world place found by text search (design doc 4, "Find a
+// place"): a city or a country the map can move to, or that an owner can pick
+// as a photo's corrected location.
+type Candidate struct {
+	// ID is the provider's stable identifier, unique within one response.
+	ID string
+	// Name is the place's own name, such as "Kyoto" or "Japan".
+	Name string
+	// Label is the name with its country, for lists: "Kyoto, Japan".
+	Label string
+	// Kind is KindCity or KindCountry.
+	Kind    string
+	Lat     float64
+	Lng     float64
+	City    string
+	Country string
+}
+
+// Searcher finds world places by name. Implementations follow the same error
+// rules as Provider: ErrTransient or ErrPermanent, never the key or the query.
+type Searcher interface {
+	// Search returns at most limit cities and countries matching query, best
+	// match first. No match is an empty slice, not an error.
+	Search(ctx context.Context, query string, limit int) ([]Candidate, error)
+}
+
 var (
 	// ErrInvalidCoordinates means the input was not a real position on Earth;
 	// the caller should reject the request (a 400 at the API boundary).

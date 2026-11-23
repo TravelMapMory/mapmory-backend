@@ -26,6 +26,8 @@ type photoRepositoryFake struct {
 	tripID    uuid.UUID
 	photos    map[uuid.UUID]*photos.Photo
 	finishErr error
+
+	onRelocate func(context.Context)
 }
 
 func newPhotoRepositoryFake(owner, tripID uuid.UUID) *photoRepositoryFake {
@@ -176,6 +178,67 @@ func (f *photoRepositoryFake) ListByTrip(_ context.Context, owner, tripID uuid.U
 		all = all[:limit]
 	}
 	return all, nil
+}
+
+func strPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func setLabels(photo *photos.Photo, labels photos.Labels, status string) {
+	photo.Country, photo.City, photo.PlaceName = strPtr(labels.Country), strPtr(labels.City), strPtr(labels.PlaceName)
+	photo.LabelProvider, photo.LabelAttribution = strPtr(labels.Provider), strPtr(labels.Attribution)
+	photo.LabelStatus = status
+}
+
+func (f *photoRepositoryFake) SuggestLabels(_ context.Context, id uuid.UUID, lat, lng float64, labels photos.Labels) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	photo, ok := f.photos[id]
+	if !ok || photo.Lat == nil || *photo.Lat != lat || *photo.Lng != lng || photo.LabelStatus == photos.LabelConfirmed {
+		return false, nil
+	}
+	setLabels(photo, labels, photos.LabelSuggested)
+	return true, nil
+}
+
+func (f *photoRepositoryFake) Relocate(ctx context.Context, owner, id uuid.UUID, lat, lng float64, labels *photos.Labels) (photos.Photo, error) {
+	if f.onRelocate != nil {
+		f.onRelocate(ctx)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	photo, ok := f.photos[id]
+	if owner != f.owner || !ok {
+		return photos.Photo{}, photos.ErrNotFound
+	}
+	if photo.State != photos.StateReady && photo.State != photos.StateNeedsLocation {
+		return photos.Photo{}, photos.ErrNotProcessed
+	}
+	photo.State, photo.Lat, photo.Lng = photos.StateReady, &lat, &lng
+	if labels != nil {
+		setLabels(photo, *labels, photos.LabelConfirmed)
+	} else {
+		setLabels(photo, photos.Labels{}, photos.LabelPending)
+	}
+	return *photo, nil
+}
+
+func (f *photoRepositoryFake) ConfirmLabels(_ context.Context, owner, id uuid.UUID) (photos.Photo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	photo, ok := f.photos[id]
+	if owner != f.owner || !ok {
+		return photos.Photo{}, photos.ErrNotFound
+	}
+	if photo.LabelStatus != photos.LabelSuggested {
+		return photos.Photo{}, photos.ErrNoSuggestion
+	}
+	photo.LabelStatus = photos.LabelConfirmed
+	return *photo, nil
 }
 
 type photoTestEnv struct {

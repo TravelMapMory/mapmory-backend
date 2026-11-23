@@ -104,6 +104,9 @@ run_constraints
 log "Checking repeated migration application"
 migrate up
 
+log "Rolling back photo place-label migration (00006)"
+migrate down
+
 log "Rolling back photo capture-order migration (00005)"
 migrate down
 

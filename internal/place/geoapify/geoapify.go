@@ -1,5 +1,5 @@
-// Package geoapify implements place.Provider on top of the Geoapify Reverse
-// Geocoding API, using only the standard library.
+// Package geoapify implements place.Provider and place.Searcher on top of the
+// Geoapify Reverse and Forward Geocoding APIs, using only the standard library.
 //
 // Request and response structures are private to this package so nothing
 // outside it depends on Geoapify's JSON. Failures are mapped to the place
@@ -50,7 +50,24 @@ type Config struct {
 type Client struct {
 	apiKey   string
 	endpoint *url.URL
+	search   *url.URL
 	http     *http.Client
+}
+
+// searchResponse is the part of a forward-geocoding reply (format=json) read here.
+type searchResponse struct {
+	Results []searchResult `json:"results"`
+}
+
+// searchResult is one forward-geocoding match; every field may be missing.
+type searchResult struct {
+	ResultType string  `json:"result_type"`
+	PlaceID    string  `json:"place_id"`
+	Name       string  `json:"name"`
+	City       string  `json:"city"`
+	Country    string  `json:"country"`
+	Lat        float64 `json:"lat"`
+	Lon        float64 `json:"lon"`
 }
 
 // reverseResponse is the part of Geoapify's reverse-geocoding reply (with
@@ -100,6 +117,7 @@ func New(cfg Config) (*Client, error) {
 	return &Client{
 		apiKey:   key,
 		endpoint: base.JoinPath("v1", "geocode", "reverse"),
+		search:   base.JoinPath("v1", "geocode", "search"),
 		http:     &http.Client{Timeout: timeout},
 	}, nil
 }
@@ -115,7 +133,10 @@ func New(cfg Config) (*Client, error) {
 // ponytail: no lang or type parameters; add lang when the UI needs localized
 // labels.
 func (c *Client) ReverseGeocode(ctx context.Context, lat, lng float64) (place.ResolvedPlace, error) {
-	body, err := c.get(ctx, lat, lng)
+	body, err := c.get(ctx, *c.endpoint, url.Values{
+		"lat": {strconv.FormatFloat(lat, 'f', -1, 64)},
+		"lon": {strconv.FormatFloat(lng, 'f', -1, 64)},
+	})
 	if err != nil {
 		return place.ResolvedPlace{}, err
 	}
@@ -125,14 +146,10 @@ func (c *Client) ReverseGeocode(ctx context.Context, lat, lng float64) (place.Re
 // get performs the HTTP request and returns the body of a 200 response. It
 // classifies every failure as transient or permanent and keeps the key out of
 // the returned errors.
-func (c *Client) get(ctx context.Context, lat, lng float64) ([]byte, error) {
-	u := *c.endpoint
-	u.RawQuery = url.Values{
-		"lat":    {strconv.FormatFloat(lat, 'f', -1, 64)},
-		"lon":    {strconv.FormatFloat(lng, 'f', -1, 64)},
-		"format": {"json"},
-		"apiKey": {c.apiKey},
-	}.Encode()
+func (c *Client) get(ctx context.Context, u url.URL, query url.Values) ([]byte, error) {
+	query.Set("format", "json")
+	query.Set("apiKey", c.apiKey)
+	u.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -196,4 +213,73 @@ func parseReverse(body []byte) (place.ResolvedPlace, error) {
 		Provider:     providerName,
 		Attributions: attrs,
 	}, nil
+}
+
+// Search asks Geoapify's forward geocoder for places named query and keeps the
+// cities and countries, best match first. Streets, venues and regions are
+// dropped: the map moves to a city or a country, and a corrected photo is
+// labelled at city level by default (design doc 7.4).
+//
+// Errors follow ReverseGeocode's rules; no match is an empty slice.
+func (c *Client) Search(ctx context.Context, query string, limit int) ([]place.Candidate, error) {
+	// Ask for more than limit, because non-city results are filtered out.
+	body, err := c.get(ctx, *c.search, url.Values{
+		"text":  {query},
+		"limit": {strconv.Itoa(min(max(limit, 1)*3, 20))},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return parseSearch(body, limit)
+}
+
+func parseSearch(body []byte, limit int) ([]place.Candidate, error) {
+	var resp searchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("geoapify: decode response: %w", place.ErrPermanent)
+	}
+	candidates := make([]place.Candidate, 0, limit)
+	seen := make(map[string]bool)
+	for _, r := range resp.Results {
+		if len(candidates) == limit {
+			break
+		}
+		country := strings.TrimSpace(r.Country)
+		var c place.Candidate
+		switch r.ResultType {
+		case "city":
+			city := strings.TrimSpace(r.City)
+			if city == "" {
+				city = strings.TrimSpace(r.Name)
+			}
+			if city == "" {
+				continue
+			}
+			c = place.Candidate{Name: city, Kind: place.KindCity, City: city, Country: country, Label: city}
+			if country != "" {
+				c.Label = city + ", " + country
+			}
+		case "country":
+			name := country
+			if name == "" {
+				name = strings.TrimSpace(r.Name)
+			}
+			if name == "" {
+				continue
+			}
+			c = place.Candidate{Name: name, Kind: place.KindCountry, Country: name, Label: name}
+		default:
+			continue
+		}
+		c.ID, c.Lat, c.Lng = r.PlaceID, r.Lat, r.Lon
+		if c.ID == "" {
+			c.ID = c.Kind + ":" + c.Label
+		}
+		if seen[c.ID] || c.Lat < -90 || c.Lat > 90 || c.Lng < -180 || c.Lng > 180 {
+			continue
+		}
+		seen[c.ID] = true
+		candidates = append(candidates, c)
+	}
+	return candidates, nil
 }

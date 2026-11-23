@@ -11,6 +11,22 @@ type trip struct {
 	Cover      *tripCover `json:"cover"`
 }
 
+// ownedTrip is a database-mode trip with the aggregates of its processed
+// photos (design doc 3.3). The legacy prototype keeps the plain trip shape.
+type ownedTrip struct {
+	trip
+	LocatedCount int      `json:"located_count"`
+	Cities       []string `json:"cities"`
+	Countries    []string `json:"countries"`
+	StartDate    *string  `json:"start_date"`
+	EndDate      *string  `json:"end_date"`
+}
+
+type ownedTripPage struct {
+	Items      []ownedTrip `json:"items"`
+	NextCursor *string     `json:"next_cursor"`
+}
+
 type tripCover struct {
 	PhotoID string       `json:"photo_id"`
 	Image   displayImage `json:"image"`
@@ -53,6 +69,11 @@ type apiPhoto struct {
 	Lat              *float64      `json:"lat"`
 	Lng              *float64      `json:"lng"`
 	DisplayImage     *displayImage `json:"display_image"`
+	Country          *string       `json:"country"`
+	City             *string       `json:"city"`
+	PlaceName        *string       `json:"place_name"`
+	LabelStatus      string        `json:"label_status"`
+	LabelAttribution *string       `json:"label_attribution"`
 }
 
 type photoPage struct {

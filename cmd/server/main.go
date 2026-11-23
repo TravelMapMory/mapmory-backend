@@ -16,6 +16,8 @@ import (
 	"github.com/TravelMapMory/mapmory-backend/internal/appuser"
 	"github.com/TravelMapMory/mapmory-backend/internal/auth"
 	"github.com/TravelMapMory/mapmory-backend/internal/photostorage"
+	"github.com/TravelMapMory/mapmory-backend/internal/place"
+	"github.com/TravelMapMory/mapmory-backend/internal/place/geoapify"
 	"github.com/TravelMapMory/mapmory-backend/internal/postgres"
 	"github.com/google/uuid"
 )
@@ -300,6 +302,21 @@ func newConfiguredHandler(
 
 	dependencies := newDatabaseDependencies(db)
 
+	// Place labels and search are optional: without a key, labels stay pending
+	// and place search answers 503, while uploads and browsing keep working.
+	var resolver *place.Resolver
+	var searcher place.Searcher
+	if key := strings.TrimSpace(os.Getenv("GEOAPIFY_API_KEY")); key != "" {
+		client, err := geoapify.New(geoapify.Config{APIKey: key})
+		if err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("initialize place resolution: %w", err)
+		}
+		resolver, searcher = place.NewResolver(client), client
+	} else {
+		log.Printf("GEOAPIFY_API_KEY is not set; place labels stay pending and place search is disabled")
+	}
+
 	// Uploads are optional so that database mode keeps working without a bucket.
 	var uploadRoutes *uploadHandlers
 	cleanup := func() { _ = db.Close() }
@@ -310,6 +327,8 @@ func newConfiguredHandler(
 			return nil, nil, fmt.Errorf("initialize photo uploads: %w", err)
 		}
 		uploadRoutes = newUploadHandlers(dependencies.trips, dependencies.uploads, dependencies.photos, store)
+		uploadRoutes.places = resolver
+		uploadRoutes.overview = dependencies.overview
 		cleanup = func() {
 			_ = store.Close()
 			_ = db.Close()
@@ -321,7 +340,20 @@ func newConfiguredHandler(
 	// Persistent trip routes require both verified Firebase identity and
 	// resolved application-user identity. The legacy handler is used only
 	// when database-backed mode is disabled.
-	return newPersistentHandler(verifier, dependencies.users, dependencies.trips, uploadRoutes), cleanup, nil
+	return withPlaceSearch(newPersistentHandler(verifier, dependencies.users, dependencies.trips, uploadRoutes), searcher),
+		cleanup, nil
+}
+
+// withPlaceSearch adds the public, rate-limited GET /api/places/search in
+// front of next. A nil searcher still mounts the route, answering 503.
+func withPlaceSearch(next http.Handler, searcher place.Searcher) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/places/search", &placeSearchHandler{
+		searcher: searcher,
+		limiter:  newRateLimiter(placeSearchPerSecond, placeSearchPerSecond),
+	})
+	mux.Handle("/", next)
+	return mux
 }
 
 // listenAddr returns the address to bind, honouring the PORT variable that
