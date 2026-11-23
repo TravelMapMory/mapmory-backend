@@ -18,9 +18,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// labelLookupTimeout bounds one reverse-geocoding call. A slow provider leaves
-// the labels pending instead of holding the upload or correction request.
-const labelLookupTimeout = 8 * time.Second
+const (
+	// labelLookupTimeout is the maximum time to wait for a place resolver to
+	// return labels for a photo's coordinates. The resolver is called in the
+	// background, so a failure does not block the upload.
+	labelLookupTimeout = 8 * time.Second
+	// locationWriteTimeout is the maximum time to wait for a photo location
+	// update to be stored. The update is atomic, so a failure leaves the photo
+	// in its previous state.
+	locationWriteTimeout = 5 * time.Second
+)
 
 // Place search limits (design doc 5.2: debounced and rate-limited).
 const (
@@ -172,7 +179,20 @@ func (h *uploadHandlers) updatePhotoLocation(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		labels := h.lookupLabels(ctx, photoID, *patch.Lat, *patch.Lng)
-		photo, err = h.photos.Relocate(context.WithoutCancel(ctx), owner, photoID, *patch.Lat, *patch.Lng, labels)
+		writeCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			locationWriteTimeout,
+		)
+		defer cancel()
+
+		photo, err = h.photos.Relocate(
+			writeCtx,
+			owner,
+			photoID,
+			*patch.Lat,
+			*patch.Lng,
+			labels,
+		)
 	}
 	if err != nil {
 		h.writeLocationError(w, err)

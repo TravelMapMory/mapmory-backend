@@ -26,6 +26,8 @@ type photoRepositoryFake struct {
 	tripID    uuid.UUID
 	photos    map[uuid.UUID]*photos.Photo
 	finishErr error
+
+	onRelocate func(context.Context)
 }
 
 func newPhotoRepositoryFake(owner, tripID uuid.UUID) *photoRepositoryFake {
@@ -202,7 +204,11 @@ func (f *photoRepositoryFake) SuggestLabels(_ context.Context, id uuid.UUID, lat
 	return true, nil
 }
 
-func (f *photoRepositoryFake) Relocate(_ context.Context, owner, id uuid.UUID, lat, lng float64, labels *photos.Labels) (photos.Photo, error) {
+func (f *photoRepositoryFake) Relocate(ctx context.Context, owner, id uuid.UUID, lat, lng float64, labels *photos.Labels) (photos.Photo, error) {
+	if f.onRelocate != nil {
+		f.onRelocate(ctx)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	photo, ok := f.photos[id]

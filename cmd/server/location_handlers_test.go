@@ -202,6 +202,74 @@ func TestUpdatePhotoLocationWithoutResolver(t *testing.T) {
 	}
 }
 
+func TestUpdatePhotoLocationUsesBoundedWriteContext(t *testing.T) {
+	env := newLocationTestEnv(t, nil)
+	photo := env.processed(photos.StateNeedsLocation, nil, nil)
+
+	var (
+		writeDeadline time.Time
+		writeErr      error
+		called        bool
+	)
+
+	env.repo.onRelocate = func(ctx context.Context) {
+		called = true
+
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Error("Relocate context has no deadline")
+			return
+		}
+
+		writeDeadline = deadline
+		writeErr = ctx.Err()
+	}
+
+	// Simulate a client disconnect before the database write.
+	// The write should still receive a usable, bounded context.
+	requestCtx, cancel := context.WithCancel(context.Background())
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/photos/"+photo.ID.String()+"/location",
+		strings.NewReader(`{"lat":34.967,"lng":135.773}`),
+	).WithContext(requestCtx)
+
+	req.Header.Set("Authorization", "Bearer valid")
+	cancel()
+
+	response := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(response, req)
+
+	if !called {
+		t.Fatal("Relocate was not called")
+	}
+	if writeErr != nil {
+		t.Errorf("write context already canceled: %v", writeErr)
+	}
+
+	if !writeDeadline.IsZero() {
+		remaining := time.Until(writeDeadline)
+
+		if remaining <= 0 || remaining > locationWriteTimeout {
+			t.Errorf(
+				"write deadline remaining = %v; expected (0, %v]",
+				remaining,
+				locationWriteTimeout,
+			)
+		}
+	}
+
+	if response.Code != http.StatusOK {
+		t.Errorf(
+			"status = %d, want 200; body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+}
+
 func TestConfirmSuggestedLabels(t *testing.T) {
 	env := newLocationTestEnv(t, &providerFake{result: kyoto})
 	photo := env.processed(photos.StateReady, floatPtr(34.967), floatPtr(135.773))
