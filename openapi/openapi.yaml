@@ -456,7 +456,10 @@ components:
                   code: processing_in_progress
                   message: the photo is already being processed
     '503':
-      description: 'Application-user resolution unavailable; error.code: user_resolution_unavailable.'
+      description: 'A temporary server-side failure, never a credential problem: error.code
+        auth_unavailable (Firebase signing keys unreachable; Retry-After is set) or
+        user_resolution_unavailable. Clients must not sign the user out on a 503; only
+        a 401 warrants a token refresh or a new sign-in.'
       content:
         application/json:
           schema:
