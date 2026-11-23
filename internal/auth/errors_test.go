@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,14 +22,34 @@ func (v errorVerifier) VerifyIDToken(context.Context, string) (*firebaseauth.Tok
 
 func TestRequireIdentitySeparatesInfrastructureFailures(t *testing.T) {
 	cases := []struct {
-		name   string
-		err    error
-		status int
-		code   string
+		name       string
+		err        error
+		status     int
+		code       string
+		retryAfter string
 	}{
-		{"credential", errors.New("token expired"), http.StatusUnauthorized, "unauthorized"},
-		{"unavailable", errors.Join(ErrVerifierUnavailable, errors.New("keys unreachable at https://internal.example")), http.StatusServiceUnavailable, "auth_unavailable"},
-		{"internal", errors.Join(ErrVerifierFailed, errors.New("project id not available")), http.StatusInternalServerError, "internal_error"},
+		{"credential", errors.New("token expired"), http.StatusUnauthorized, "unauthorized", ""},
+
+		{
+			"unavailable",
+			errors.Join(
+				ErrVerifierUnavailable,
+				errors.New("keys unreachable at https://internal.example"),
+			),
+			http.StatusServiceUnavailable,
+			"auth_unavailable",
+			"5",
+		},
+		{
+			"internal",
+			errors.Join(
+				ErrVerifierFailed,
+				errors.New("project id not available"),
+			),
+			http.StatusInternalServerError,
+			"internal_error",
+			"",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -48,6 +69,9 @@ func TestRequireIdentitySeparatesInfrastructureFailures(t *testing.T) {
 			}
 			if (c.status == http.StatusUnauthorized) != (rec.Header().Get("WWW-Authenticate") != "") {
 				t.Fatalf("WWW-Authenticate must only accompany a 401: %v", rec.Header())
+			}
+			if got := rec.Header().Get("Retry-After"); got != c.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, c.retryAfter)
 			}
 		})
 	}
@@ -74,10 +98,51 @@ func TestClassifyVerifyErrorKeepsSDKCredentialErrors(t *testing.T) {
 }
 
 func TestClassifyVerifyErrorIsConservative(t *testing.T) {
-	if err := classifyVerifyError(context.DeadlineExceeded); !errors.Is(err, ErrVerifierUnavailable) {
-		t.Fatalf("deadline: %v", err)
+	cases := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{
+			"deadline exceeded",
+			context.DeadlineExceeded,
+			ErrVerifierUnavailable,
+		},
+		{
+			"wrapped deadline",
+			fmt.Errorf("fetch signing keys: %w", context.DeadlineExceeded),
+			ErrVerifierUnavailable,
+		},
+		{
+			"request canceled",
+			context.Canceled,
+			ErrVerifierUnavailable,
+		},
+		{
+			"unexpected error",
+			errors.New("something new"),
+			ErrVerifierFailed,
+		},
 	}
-	if err := classifyVerifyError(errors.New("something new")); !errors.Is(err, ErrVerifierFailed) || errors.Is(err, ErrVerifierUnavailable) {
-		t.Fatalf("unknown errors are internal, never transient: %v", err)
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyVerifyError(c.err)
+
+			if !errors.Is(got, c.want) {
+				t.Fatalf("classifyVerifyError() = %v, want %v", got, c.want)
+			}
+			if !errors.Is(got, c.err) {
+				t.Errorf("classification lost original error: %v", got)
+			}
+
+			other := ErrVerifierFailed
+			if c.want == ErrVerifierFailed {
+				other = ErrVerifierUnavailable
+			}
+			if errors.Is(got, other) {
+				t.Errorf("unexpected classification %v: %v", other, got)
+			}
+		})
 	}
 }
