@@ -119,6 +119,10 @@ type Repository interface {
 	// PublicPoints returns photos of live public shares whose coarse position
 	// is inside the box (west > east crosses the antimeridian), at most limit.
 	PublicPoints(ctx context.Context, west, south, east, north float64, limit int) ([]PublicPoint, error)
+	// Report records a visitor's report on a live public share, which hides it
+	// from public views until the team resolves the report (design doc 3.5).
+	// It returns ErrNotFound for any other share.
+	Report(ctx context.Context, shareID uuid.UUID, reason string) error
 }
 
 // NewToken returns 128 random bits as unpadded base64url (22 characters).

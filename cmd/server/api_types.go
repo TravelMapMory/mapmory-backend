@@ -20,6 +20,8 @@ type ownedTrip struct {
 	Countries    []string `json:"countries"`
 	StartDate    *string  `json:"start_date"`
 	EndDate      *string  `json:"end_date"`
+	// Visibility is "public" while the trip has a live public share.
+	Visibility string `json:"visibility"`
 }
 
 type ownedTripPage struct {

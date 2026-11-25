@@ -25,6 +25,9 @@ type TripStats struct {
 	EndDate   *string
 	// Cover is the first processed photo in capture order, nil for an empty trip.
 	Cover *Photo
+	// Public reports a live public share of the trip (design doc 4.2: trips are
+	// private until the owner shares them publicly).
+	Public bool
 }
 
 // MapQuery selects the caller's located photos for the owner map (GET
@@ -148,6 +151,27 @@ func (r *PostgresRepository) TripStats(ctx context.Context, ownerID uuid.UUID, t
 	}
 	if err := labels.Err(); err != nil {
 		return nil, fmt.Errorf("trip labels: %w", err)
+	}
+
+	public, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT s.trip_id FROM shares s JOIN trips t ON t.id = s.trip_id
+		WHERE t.owner_id = $1 AND s.trip_id = ANY($2::uuid[]) AND s.mode = 'public' AND s.revoked_at IS NULL
+	`, ownerID, "{"+strings.Join(ids, ",")+"}")
+	if err != nil {
+		return nil, fmt.Errorf("trip visibility: %w", err)
+	}
+	defer public.Close()
+	for public.Next() {
+		var id uuid.UUID
+		if err := public.Scan(&id); err != nil {
+			return nil, fmt.Errorf("trip visibility: %w", err)
+		}
+		s := stats[id]
+		s.Public = true
+		stats[id] = s
+	}
+	if err := public.Err(); err != nil {
+		return nil, fmt.Errorf("trip visibility: %w", err)
 	}
 
 	// The cover is the first processed photo in the trip's capture order.

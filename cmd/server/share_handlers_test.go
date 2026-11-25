@@ -29,6 +29,16 @@ type sharesFake struct {
 	onCandidates  func()
 	onCreate      func(context.Context)
 	publicLimit   int
+	publicShare   uuid.UUID
+	reports       []string
+}
+
+func (f *sharesFake) Report(_ context.Context, id uuid.UUID, reason string) error {
+	if id != f.publicShare {
+		return shares.ErrNotFound
+	}
+	f.reports = append(f.reports, reason)
+	return nil
 }
 
 func (f *sharesFake) Candidates(_ context.Context, owner, trip uuid.UUID, ids []uuid.UUID) ([]shares.Candidate, error) {
@@ -410,5 +420,44 @@ func TestPublicMapTruncationAtRepositoryLimit(t *testing.T) {
 				t.Errorf("clusters=%+v; want one cluster of %d photos", result.Clusters, min(tc.count, publicPointLimit))
 			}
 		})
+	}
+}
+
+func TestReportPublicShare(t *testing.T) {
+	env, repo := newShareTestEnv(t, nil)
+	repo.publicShare = uuid.New()
+	path := "/api/shares/" + repo.publicShare.String() + "/report"
+
+	// No account needed: a visitor reports what they see.
+	response := tripRequest(env.handler, "POST", path, `{"reason":"  Shows a private person  "}`, "")
+	if response.Code != http.StatusNoContent || len(repo.reports) != 1 || repo.reports[0] != "Shows a private person" {
+		t.Fatalf("status=%d reports=%v body=%s", response.Code, repo.reports, response.Body.String())
+	}
+	for _, body := range []string{``, `{}`, `{"reason":"   "}`, `{"reason":"` + strings.Repeat("r", 501) + `"}`, `{"reason":"x","extra":1}`} {
+		if response := tripRequest(env.handler, "POST", path, body, ""); response.Code != http.StatusBadRequest {
+			t.Errorf("%.40q: status=%d", body, response.Code)
+		}
+	}
+	// Link-only, revoked or unknown shares cannot be reported.
+	for _, id := range []string{uuid.NewString(), "x"} {
+		if response := tripRequest(env.handler, "POST", "/api/shares/"+id+"/report", `{"reason":"x"}`, ""); response.Code != http.StatusNotFound {
+			t.Fatalf("%s: status=%d", id, response.Code)
+		}
+	}
+}
+
+func TestReportRateLimit(t *testing.T) {
+	env, repo := newShareTestEnv(t, nil)
+	repo.publicShare = uuid.New()
+	path := "/api/shares/" + repo.publicShare.String() + "/report"
+	limited := false
+	for i := 0; i < 10; i++ {
+		if response := tripRequest(env.handler, "POST", path, `{"reason":"spam"}`, ""); response.Code == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatal("ten reports in a row were never rate-limited")
 	}
 }

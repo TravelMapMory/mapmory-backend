@@ -290,3 +290,44 @@ func containsShare(points []PublicPoint, id uuid.UUID) bool {
 	}
 	return false
 }
+
+func TestReportHidesPublicShareIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	f := newTrip(t, db)
+	repo := NewPostgresRepository(db)
+	ctx := testContext(t)
+	photo := f.photo(t, "ready", "")
+	public, err := repo.Create(ctx, f.owner, NewShare{TripID: f.tripID, Mode: ModePublic, Title: "Public", Photos: selected(photo)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := repo.Create(ctx, f.owner, NewShare{TripID: f.tripID, Mode: ModeLink, Title: "Link", Photos: selected(photo)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Report(ctx, link.ID, "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a link share must not be reportable: err=%v", err)
+	}
+	if err := repo.Report(ctx, public.ID, "Shows a private person"); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if _, err := repo.PublicByID(ctx, public.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a reported share stayed public: err=%v", err)
+	}
+	if points, _ := repo.PublicPoints(ctx, 135, 34, 136, 36, 100); containsShare(points, public.ID) {
+		t.Fatal("a reported share stayed on the public map")
+	}
+	// The owner's own link still works while the report is reviewed.
+	if _, err := repo.ByToken(ctx, public.Token); err != nil {
+		t.Fatalf("owner link after report: %v", err)
+	}
+
+	// Once the team resolves the report, the share is public again.
+	if _, err := db.ExecContext(ctx, `UPDATE share_reports SET resolved_at = now() WHERE share_id = $1`, public.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.PublicByID(ctx, public.ID); err != nil {
+		t.Fatalf("resolved report still hides the share: %v", err)
+	}
+}

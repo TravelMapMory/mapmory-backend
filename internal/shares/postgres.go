@@ -241,7 +241,7 @@ func (r *PostgresRepository) ByToken(ctx context.Context, token string) (Collect
 }
 
 func (r *PostgresRepository) PublicByID(ctx context.Context, shareID uuid.UUID) (Collection, error) {
-	c, revoked, err := r.collection(ctx, "id = $1 AND mode = 'public'", shareID)
+	c, revoked, err := r.collection(ctx, "id = $1 AND mode = 'public' AND "+notUnderReview("shares.id"), shareID)
 	if err != nil {
 		return Collection{}, err
 	}
@@ -261,7 +261,7 @@ func (r *PostgresRepository) PublicPoints(ctx context.Context, west, south, east
 		FROM shares s
 		JOIN share_photos sp ON sp.share_id = s.id
 		JOIN photos p ON p.id = sp.photo_id
-		WHERE s.mode = 'public' AND s.revoked_at IS NULL
+		WHERE s.mode = 'public' AND s.revoked_at IS NULL AND `+notUnderReview("s.id")+`
 		  AND p.state IN ('ready', 'needs-location') AND p.display_object_name IS NOT NULL
 		  AND sp.display_lat BETWEEN $1 AND $2 AND `+lngCondition+`
 		ORDER BY s.id, p.id
@@ -280,4 +280,25 @@ func (r *PostgresRepository) PublicPoints(ctx context.Context, west, south, east
 		points = append(points, p)
 	}
 	return points, rows.Err()
+}
+
+// notUnderReview is a condition that hides the public share in column while
+// a report on it is unresolved.
+func notUnderReview(column string) string {
+	return `NOT EXISTS (SELECT 1 FROM share_reports sr WHERE sr.share_id = ` + column + ` AND sr.resolved_at IS NULL)`
+}
+
+func (r *PostgresRepository) Report(ctx context.Context, shareID uuid.UUID, reason string) error {
+	result, err := r.db.ExecContext(ctx, `
+		INSERT INTO share_reports (id, share_id, reason)
+		SELECT $1, s.id, $3 FROM shares s
+		WHERE s.id = $2 AND s.mode = 'public' AND s.revoked_at IS NULL
+	`, uuid.New(), shareID, reason)
+	if err != nil {
+		return fmt.Errorf("report share: %w", err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
