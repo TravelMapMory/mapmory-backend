@@ -3,17 +3,41 @@ info:
   title: MapMory — minimal private-flow draft
   version: 0.0.9
   description: |-
-    PROPOSED, pending team review. Version 0.0.7 documents authenticated,
-    owner-scoped create/list/get/update trip operations implemented in PostgreSQL
-    database mode. The legacy in-memory mode does not implement this full contract.
+    PROPOSED, pending team review. Version 0.0.9 documents the
+    implemented private trip, photo and sharing APIs, including
+    authenticated owner operations, link and public shares,
+    the public map, place labels and location correction.
 
-    The upload lifecycle (registerBatch, completeUpload, getBatch), photo
-    listing (listTripPhotos) and photo retrieval (getPhoto) are implemented
-    in database mode when a photo bucket is configured. completeUpload
-    processes within the request, one image at a time. error_code is one of
-    unsupported_type, file_too_large, image_too_large or invalid_image.
-    Cursor-based trip pagination remains a proposal. Map, geocoding, sharing,
-    deletion and the failed-photo retry route are outside this draft.
+    In PostgreSQL database mode, the backend resolves Firebase identities
+    to persistent application-user UUIDs and enforces ownership on private
+    resources. The legacy in-memory mode does not implement this full
+    contract.
+
+    Photo uploads (registerBatch, completeUpload, getBatch), photo listing
+    (listTripPhotos), photo retrieval (getPhoto), location correction
+    (updatePhotoLocation), the owner map (listMapPhotos) and Dashboard summary
+    (getSummary) are available in database mode when a photo bucket is
+    configured. The backend processes each photo within its completeUpload
+    request. Processing error_code values include unsupported_type,
+    file_too_large, image_too_large and invalid_image.
+
+    Place resolution and correction:
+    - Photos retain their original EXIF coordinates separately from their
+      effective coordinates, which the owner can correct.
+    - Place labels have an independent status: pending, suggested or
+      confirmed. A photo can remain ready even when place labels are pending.
+    - When a photo has valid coordinates, the place resolver may suggest
+      country, city and place labels. Provider information and attribution
+      are retained with the labels.
+    - The owner can confirm suggested labels or provide new coordinates.
+      Successful resolution of corrected coordinates stores confirmed
+      labels. If resolution fails, the corrected coordinates are still
+      saved and the labels remain pending.
+    - Place search (searchPlaces) is public and rate-limited. Without a
+      configured geocoding provider, the endpoint returns 503.
+    - The owner map returns located photos with optional geographic,
+      trip, date and text filters. Dashboard summaries report photo
+      counts, distinct places, review counts and recent uploads.
 
     Upload recovery, as implemented:
     - completeUpload is idempotent: a processed or failed photo is returned
@@ -23,27 +47,31 @@ info:
     - A transient server failure during processing returns the photo to
       pending and 500; the client calls completeUpload again.
     - Upload URLs expire 15 minutes after registration and are not renewed.
-      While the URL is valid, the client may PUT again and complete. After it
-      expires, completeUpload either succeeds (the bytes arrived) or returns
-      409 upload_missing, and the client registers the file again in a new
-      batch, which creates a new photo.
+      While the URL is valid, the client may PUT again and complete. After
+      it expires, completeUpload either succeeds (the bytes arrived) or
+      returns 409 upload_missing, and the client registers the file again
+      in a new batch, which creates a new photo.
     - failed is final for that photo; the image itself is unusable.
 
-    Ordering (backend #45, frontend #25): listTripPhotos uses capture order.
-    The remaining #45 rules belong to endpoints not in this draft: recently
-    uploaded photos (newest upload first, then id) to GET /api/me/summary,
-    and trip date ranges that ignore missing or invalid capture times to the
-    trip representation.
+    Ordering (backend #45, frontend #25):
+    - listTripPhotos uses capture order.
+    - Recently uploaded photos are ordered by upload time, newest first,
+      with the photo ID as a tie-breaker.
+    - Trip date ranges ignore missing or invalid capture times.
+    - The owner map orders located photos by capture time, newest first,
+      and returns at most 2,000 results.
 
-    Implemented private trip routes require a Firebase ID token; the backend
-    resolves the application-user identity and enforces ownership.
+    Cursor-based trip pagination remains a proposal. Sharing, deletion
+    and the failed-photo retry route are outside this draft.
 
     Open questions:
     - How should batch registration recover from a lost response: an
       Idempotency-Key or client-generated batch ID?
-    - Is a persistent uploading state needed, and how is upload start detected?
-    - Confirm proposed pagination, photo fields, input limits and error codes
-      with the UI. Photo-list ordering follows backend #45 and frontend #25.
+    - Is a persistent uploading state needed, and how is upload start
+      detected?
+    - Confirm proposed pagination, photo fields, input limits and error
+      codes with the UI. Photo-list ordering follows backend #45 and
+      frontend #25.
   contact:
     name: MapMory team
     url: https://github.com/TravelMapMory
@@ -818,7 +846,10 @@ components:
                   code: processing_in_progress
                   message: the photo is already being processed
     '503':
-      description: 'Application-user resolution unavailable; error.code: user_resolution_unavailable.'
+      description: 'A temporary server-side failure, never a credential problem: error.code
+        auth_unavailable (Firebase signing keys unreachable; Retry-After is set) or
+        user_resolution_unavailable. Clients must not sign the user out on a 503; only
+        a 401 warrants a token refresh or a new sign-in.'
       content:
         application/json:
           schema:
