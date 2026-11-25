@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 
+	"github.com/TravelMapMory/mapmory-backend/internal/erasure"
 	"github.com/TravelMapMory/mapmory-backend/internal/photos"
 	"github.com/TravelMapMory/mapmory-backend/internal/shares"
 	"github.com/TravelMapMory/mapmory-backend/internal/trips"
@@ -20,6 +21,7 @@ type databaseDependencies struct {
 	// overview reads trip aggregates, the owner map and the Dashboard summary.
 	overview photos.Overview
 	shares   shares.Repository
+	erasure  erasure.Repository
 }
 
 func newDatabaseDependencies(db *sql.DB) databaseDependencies {
@@ -30,5 +32,6 @@ func newDatabaseDependencies(db *sql.DB) databaseDependencies {
 		photos:   photos.NewPostgresRepository(db),
 		overview: photos.NewPostgresRepository(db),
 		shares:   shares.NewPostgresRepository(db),
+		erasure:  erasure.NewPostgresRepository(db),
 	}
 }
