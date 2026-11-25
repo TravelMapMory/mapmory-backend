@@ -425,6 +425,7 @@ func parsePublicMapQuery(r *http.Request) ([4]float64, int, string) {
 // publicMap serves GET /api/public/map: clusters of photos from live public
 // shares in the visible box (design doc 5.2), at most 200.
 func (h *shareHandlers) publicMap(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	box, zoom, message := parsePublicMapQuery(r)
 	if message != "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", message)

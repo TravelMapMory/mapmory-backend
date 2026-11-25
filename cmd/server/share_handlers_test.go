@@ -263,6 +263,9 @@ func TestPublicMap(t *testing.T) {
 		{PhotoID: uuid.New(), ShareID: share, ShareTitle: "Kyoto days", DisplayObjectName: "display/b.jpg", Lat: 35.01, Lng: 135.77, City: &city},
 	}
 	response := publicRequest(env.handler, "/api/public/map?bbox=130,30,140,40&zoom=6")
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
