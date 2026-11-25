@@ -635,6 +635,52 @@ paths:
           $ref: '#/components/responses/503'
       tags:
       - Sharing
+  /shares/{share_id}/report:
+    parameters:
+    - name: share_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      operationId: reportShare
+      summary: Report a public share
+      description: 'No account needed, rate-limited (design doc 3.5). Only a live
+        public share can be reported. A share with an unresolved report is hidden
+        from the public map and its public page until the team reviews it; the
+        owner''s link keeps working.'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - reason
+              properties:
+                reason:
+                  type: string
+                  description: 1 to 500 characters after trimming.
+      responses:
+        '204':
+          description: Reported
+        '400':
+          $ref: '#/components/responses/400'
+        '404':
+          $ref: '#/components/responses/404'
+        '429':
+          description: 'Too many reports; error.code: rate_limited.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Sharing
   /s/{token}:
     parameters:
     - name: token
@@ -1141,6 +1187,7 @@ components:
       - countries
       - start_date
       - end_date
+      - visibility
       properties:
         id:
           type: string
@@ -1183,6 +1230,13 @@ components:
           - string
           - 'null'
           format: date
+        visibility:
+          type: string
+          enum:
+          - private
+          - public
+          description: public while the trip has a live public share; trips are
+            private until the owner shares them publicly (design doc 4.2).
       description: photo_count and the other aggregates cover processed photos (ready
         or needs-location) only.
       title: Trip

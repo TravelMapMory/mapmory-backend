@@ -114,6 +114,9 @@ func TestTripResponsesIncludePhotoAggregates(t *testing.T) {
 
 	for _, path := range []string{"/api/trips", "/api/trips/" + record.ID.String()} {
 		response := tripRequest(env.handler, "GET", path, "", "Bearer valid")
+		if !strings.Contains(response.Body.String(), `"visibility":"private"`) {
+			t.Fatalf("%s: a trip without a public share must be private: %s", path, response.Body.String())
+		}
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s: status=%d body=%s", path, response.Code, response.Body.String())
 		}
@@ -228,5 +231,15 @@ func TestOverviewRoutesRequireAuthAndHideErrors(t *testing.T) {
 		if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "secret") {
 			t.Fatalf("%s failure: status=%d body=%s", path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestTripVisibilityFollowsPublicShares(t *testing.T) {
+	overview := &overviewFake{}
+	env, record := newOverviewTestEnv(t, overview)
+	overview.stats = map[uuid.UUID]photos.TripStats{record.ID: {Public: true}}
+	response := tripRequest(env.handler, "GET", "/api/trips/"+record.ID.String(), "", "Bearer valid")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"visibility":"public"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

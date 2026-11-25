@@ -157,3 +157,58 @@ func TestSummaryIntegration(t *testing.T) {
 		t.Fatalf("stranger summary = %+v, %v", other, err)
 	}
 }
+
+func TestTripVisibilityIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	f := newFixture(t, db)
+	repo := NewPostgresRepository(db)
+	ctx := testContext(t)
+
+	stats, err := repo.TripStats(ctx, f.owner, []uuid.UUID{f.tripID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats[f.tripID].Public {
+		t.Fatal("a new trip must be private")
+	}
+
+	share := uuid.New()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO shares (id, trip_id, mode, title, token)
+		VALUES ($1, $2, 'link', 'L', $3)
+	`, share, f.tripID, "link-token-"+share.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO shares (id, trip_id, mode, title, token, revoked_at)
+		VALUES (gen_random_uuid(), $1, 'public', 'Old', $2, now())
+	`, f.tripID, "old-token-"+share.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err = repo.TripStats(ctx, f.owner, []uuid.UUID{f.tripID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats[f.tripID].Public {
+		t.Fatal("a link share or a revoked public share made the trip public")
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO shares (id, trip_id, mode, title, token)
+		VALUES (gen_random_uuid(), $1, 'public', 'P', $2)
+	`, f.tripID, "public-token-"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err = repo.TripStats(ctx, f.owner, []uuid.UUID{f.tripID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stats[f.tripID].Public {
+		t.Fatal("a live public share did not make the trip public")
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM shares WHERE trip_id = $1`, f.tripID); err != nil {
+		t.Fatal(err)
+	}
+}

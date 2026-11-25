@@ -30,6 +30,9 @@ const (
 	publicPointLimit = 20000
 	// publicMapPerSecond caps public-map requests across all callers.
 	publicMapPerSecond = 20
+	// reportsPerSecond caps public share reports across all callers.
+	reportsPerSecond = 2
+	shareReportMax   = 500
 )
 
 // shareHandlers serves link and public shares (backend #19, #24, #25; design
@@ -41,11 +44,13 @@ type shareHandlers struct {
 	// places finds city centres for coarse positions; nil rounds to 0.01°.
 	places        place.Searcher
 	publicLimiter *rateLimiter
+	reportLimiter *rateLimiter
 }
 
 func newShareHandlers(repo shares.Repository, uploads *uploadHandlers, places place.Searcher) *shareHandlers {
 	return &shareHandlers{repo: repo, uploads: uploads, places: places,
-		publicLimiter: newRateLimiter(publicMapPerSecond, publicMapPerSecond)}
+		publicLimiter: newRateLimiter(publicMapPerSecond, publicMapPerSecond),
+		reportLimiter: newRateLimiter(reportsPerSecond, 5)}
 }
 
 type apiShare struct {
@@ -490,4 +495,44 @@ func (h *shareHandlers) publicMap(w http.ResponseWriter, r *http.Request) {
 		response.Clusters = append(response.Clusters, cluster)
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+// report serves POST /api/shares/{share_id}/report for anyone viewing a public
+// share (design doc 3.5). The share is hidden from public views until the team
+// resolves the report.
+func (h *shareHandlers) report(w http.ResponseWriter, r *http.Request) {
+	shareID, err := uuid.Parse(r.PathValue("share_id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "share not found")
+		return
+	}
+	var body struct {
+		Reason *string `json:"reason"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 8<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body.Reason == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "reason is required")
+		return
+	}
+	reason := strings.TrimSpace(*body.Reason)
+	if n := utf8.RuneCountInString(reason); n == 0 || n > shareReportMax {
+		writeError(w, http.StatusBadRequest, "invalid_request", "reason must be 1 to 500 characters")
+		return
+	}
+	if !h.reportLimiter.allow() {
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many reports; try again shortly")
+		return
+	}
+	err = h.repo.Report(context.WithoutCancel(r.Context()), shareID, reason)
+	if errors.Is(err, shares.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "share not found")
+		return
+	}
+	if err != nil {
+		uploadInternalError(w, "share report", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

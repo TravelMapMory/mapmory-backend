@@ -33,7 +33,7 @@ func tripResponse(record trips.Trip) ownedTrip {
 	return ownedTrip{
 		trip: trip{ID: record.ID.String(), Title: record.Title, Notes: record.Notes,
 			CreatedAt: record.CreatedAt, PhotoCount: 0, Cover: nil},
-		Cities: []string{}, Countries: []string{},
+		Cities: []string{}, Countries: []string{}, Visibility: "private",
 	}
 }
 
@@ -63,6 +63,9 @@ func (h *persistentTripHandlers) tripResponses(ctx context.Context, owner uuid.U
 		}
 		if s.Countries != nil {
 			items[i].Countries = s.Countries
+		}
+		if s.Public {
+			items[i].Visibility = "public"
 		}
 		if s.Cover != nil && s.Cover.DisplayObjectName != nil {
 			url, expires, err := h.sign(*s.Cover.DisplayObjectName)
@@ -332,6 +335,7 @@ func newPersistentHandler(verifier auth.Verifier, resolver appuser.Resolver, rep
 			mux.HandleFunc("GET /api/s/{token}", s.byToken)
 			mux.HandleFunc("GET /api/public/shares/{share_id}", s.publicShare)
 			mux.HandleFunc("GET /api/public/map", s.publicMap)
+			mux.HandleFunc("POST /api/shares/{share_id}/report", s.report)
 		}
 		if uploads.overview != nil {
 			mux.Handle("GET /api/map/photos", protected(uploads.mapPhotos))
