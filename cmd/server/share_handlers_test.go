@@ -26,6 +26,9 @@ type sharesFake struct {
 	tokenErr      error
 	revoked       []uuid.UUID
 	points        []shares.PublicPoint
+	onCandidates  func()
+	onCreate      func(context.Context)
+	publicLimit   int
 }
 
 func (f *sharesFake) Candidates(_ context.Context, owner, trip uuid.UUID, ids []uuid.UUID) ([]shares.Candidate, error) {
@@ -38,12 +41,18 @@ func (f *sharesFake) Candidates(_ context.Context, owner, trip uuid.UUID, ids []
 			result = append(result, c)
 		}
 	}
+	if f.onCandidates != nil {
+		f.onCandidates()
+	}
 	return result, nil
 }
 
-func (f *sharesFake) Create(_ context.Context, owner uuid.UUID, s shares.NewShare) (shares.Share, error) {
+func (f *sharesFake) Create(ctx context.Context, owner uuid.UUID, s shares.NewShare) (shares.Share, error) {
 	if owner != f.owner {
 		return shares.Share{}, shares.ErrNotFound
+	}
+	if f.onCreate != nil {
+		f.onCreate(ctx)
 	}
 	f.created = append(f.created, s)
 	ids := make([]uuid.UUID, len(s.Photos))
@@ -77,7 +86,11 @@ func (f *sharesFake) PublicByID(context.Context, uuid.UUID) (shares.Collection, 
 	return f.collection, f.tokenErr
 }
 
-func (f *sharesFake) PublicPoints(context.Context, float64, float64, float64, float64, int) ([]shares.PublicPoint, error) {
+func (f *sharesFake) PublicPoints(_ context.Context, _, _, _, _ float64, limit int) ([]shares.PublicPoint, error) {
+	f.publicLimit = limit
+	if len(f.points) > limit {
+		return f.points[:limit], nil
+	}
 	return f.points, nil
 }
 
@@ -87,6 +100,17 @@ type citySearcher struct{ calls int }
 func (s *citySearcher) Search(context.Context, string, int) ([]place.Candidate, error) {
 	s.calls++
 	return []place.Candidate{{Kind: place.KindCity, City: "Kyoto", Country: "Japan", Lat: 35.0116, Lng: 135.7681}}, nil
+}
+
+// callbackCitySearcher permits deterministic deadline/cancellation testing without sleeping.
+type callbackCitySearcher struct {
+	calls  int
+	search func(context.Context, string) ([]place.Candidate, error)
+}
+
+func (s *callbackCitySearcher) Search(ctx context.Context, query string, _ int) ([]place.Candidate, error) {
+	s.calls++
+	return s.search(ctx, query)
 }
 
 func newShareTestEnv(t *testing.T, searcher place.Searcher) (*photoTestEnv, *sharesFake) {
@@ -258,5 +282,130 @@ func TestPublicMap(t *testing.T) {
 		if response := publicRequest(env.handler, "/api/public/map?"+query); response.Code != http.StatusBadRequest {
 			t.Errorf("%q: status=%d", query, response.Code)
 		}
+	}
+}
+
+// Cancel the request after candidate selection, immediately before the write.
+// The committed share must get a fresh deadline instead of inheriting cancellation.
+func TestCreateShareUsesBoundedWriteContext(t *testing.T) {
+	env, repo := newShareTestEnv(t, nil)
+	id := uuid.New()
+	repo.candidates[id] = shares.Candidate{ID: id}
+
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repo.onCandidates = cancel
+
+	called := false
+	repo.onCreate = func(ctx context.Context) {
+		called = true
+		if err := ctx.Err(); err != nil {
+			t.Errorf("Create context already canceled: %v", err)
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Error("Create context has no deadline")
+			return
+		}
+		if remaining := time.Until(deadline); remaining <= 0 || remaining > shareWriteTimeout {
+			t.Errorf("Create deadline remaining = %v; want (0, %v]", remaining, shareWriteTimeout)
+		}
+	}
+
+	body := `{"mode":"link","title":"Kyoto","photo_ids":["` + id.String() + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/trips/"+env.tripID.String()+"/shares", strings.NewReader(body)).WithContext(requestCtx)
+	req.Header.Set("Authorization", "Bearer valid")
+	response := httptest.NewRecorder()
+	env.handler.ServeHTTP(response, req)
+	if !called || response.Code != http.StatusCreated {
+		t.Fatalf("Create called=%v status=%d body=%s", called, response.Code, response.Body.String())
+	}
+}
+
+// The lookup budget applies across all photos, rather than resetting for each
+// distinct city. A canceled lookup must not prevent the detached database write.
+func TestCreateShareLookupCancellationFallsBackToRoundedCoordinates(t *testing.T) {
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	searcher := &callbackCitySearcher{}
+	searcher.search = func(ctx context.Context, _ string) ([]place.Candidate, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Error("place lookup has no deadline")
+		} else if remaining := time.Until(deadline); remaining <= 0 || remaining > shareLookupBudget {
+			t.Errorf("lookup deadline remaining = %v; want (0, %v]", remaining, shareLookupBudget)
+		}
+		// Simulate a disconnected client during the first provider lookup.
+		cancel()
+		return nil, ctx.Err()
+	}
+	env, repo := newShareTestEnv(t, searcher)
+	lat, lng := 35.04321, 135.70987
+	first, second := uuid.New(), uuid.New()
+	repo.candidates[first] = shares.Candidate{ID: first, Lat: &lat, Lng: &lng, City: strp("Kyoto"), Country: strp("Japan")}
+	repo.candidates[second] = shares.Candidate{ID: second, Lat: &lat, Lng: &lng, City: strp("Osaka"), Country: strp("Japan")}
+
+	body := `{"mode":"link","title":"Japan","photo_ids":["` + first.String() + `","` + second.String() + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/trips/"+env.tripID.String()+"/shares", strings.NewReader(body)).WithContext(requestCtx)
+	req.Header.Set("Authorization", "Bearer valid")
+	response := httptest.NewRecorder()
+	env.handler.ServeHTTP(response, req)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if searcher.calls != 1 {
+		t.Errorf("provider searches=%d; want 1 after cancellation", searcher.calls)
+	}
+	if len(repo.created) != 1 || len(repo.created[0].Photos) != 2 {
+		t.Fatalf("shares created = %+v", repo.created)
+	}
+	for _, photo := range repo.created[0].Photos {
+		if photo.DisplayLat == nil || photo.DisplayLng == nil || *photo.DisplayLat != 35.04 || *photo.DisplayLng != 135.71 {
+			t.Errorf("fallback position = %v,%v; want 35.04,135.71", photo.DisplayLat, photo.DisplayLng)
+		}
+	}
+}
+
+// Verify the input-row cap separately from the 200-cluster response cap.
+// In particular, overflow must be reported even when all points form one cell.
+func TestPublicMapTruncationAtRepositoryLimit(t *testing.T) {
+	const path = "/api/public/map?bbox=130,30,140,40&zoom=6"
+	for _, tc := range []struct {
+		name      string
+		count     int
+		truncated bool
+	}{
+		{name: "below cap", count: 2, truncated: false},
+		{name: "exact cap", count: publicPointLimit, truncated: false},
+		{name: "over cap", count: publicPointLimit + 1, truncated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, repo := newShareTestEnv(t, nil)
+			sharedID := uuid.New()
+			repo.points = make([]shares.PublicPoint, tc.count)
+			for i := range repo.points {
+				repo.points[i] = shares.PublicPoint{
+					PhotoID: uuid.New(), ShareID: sharedID, ShareTitle: "Kyoto",
+					Lat: 35.01, Lng: 135.77,
+				}
+			}
+			response := publicRequest(env.handler, path)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			var result apiPublicMap
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if repo.publicLimit != publicPointLimit+1 {
+				t.Errorf("repository limit=%d; want %d", repo.publicLimit, publicPointLimit+1)
+			}
+			if result.Truncated != tc.truncated {
+				t.Errorf("truncated=%v; want %v", result.Truncated, tc.truncated)
+			}
+			if len(result.Clusters) != 1 || result.Clusters[0].Count != min(tc.count, publicPointLimit) {
+				t.Errorf("clusters=%+v; want one cluster of %d photos", result.Clusters, min(tc.count, publicPointLimit))
+			}
+		})
 	}
 }

@@ -22,6 +22,10 @@ const (
 	shareTitleMax       = 120
 	shareDescriptionMax = 600
 	sharePhotosMax      = 500
+	// Bound external city-centre lookups across the entire creation request.
+	shareLookupBudget = 10 * time.Second
+	// A share write should finish even if its client disconnects, but not run indefinitely.
+	shareWriteTimeout = 5 * time.Second
 	// publicPointLimit bounds the photos one public-map request clusters.
 	publicPointLimit = 20000
 	// publicMapPerSecond caps public-map requests across all callers.
@@ -177,6 +181,9 @@ func decodeCreateShare(body io.Reader) (createShareInput, string) {
 // A missing searcher, a provider failure or no exact match returns nil, and
 // the caller rounds the position instead.
 func (h *shareHandlers) cityCentre(ctx context.Context, cache map[string]*[2]float64, city, country string) *[2]float64 {
+	if ctx.Err() != nil {
+		return nil
+	}
 	key := city + "\x00" + country
 	if centre, ok := cache[key]; ok {
 		return centre
@@ -235,6 +242,8 @@ func (h *shareHandlers) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, shareLookupBudget)
+	defer cancelLookup()
 	centres := make(map[string]*[2]float64)
 	byID := make(map[uuid.UUID]shares.Candidate, len(candidates))
 	for _, c := range candidates {
@@ -251,7 +260,7 @@ func (h *shareHandlers) create(w http.ResponseWriter, r *http.Request) {
 				if c.Country != nil {
 					country = *c.Country
 				}
-				centre = h.cityCentre(ctx, centres, *c.City, country)
+				centre = h.cityCentre(lookupCtx, centres, *c.City, country)
 			}
 			lat, lng := shares.CoarsePosition(*c.Lat, *c.Lng, centre)
 			s.DisplayLat, s.DisplayLng = &lat, &lng
@@ -259,7 +268,9 @@ func (h *shareHandlers) create(w http.ResponseWriter, r *http.Request) {
 		selected = append(selected, s)
 	}
 
-	share, err := h.repo.Create(context.WithoutCancel(ctx), owner, shares.NewShare{
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), shareWriteTimeout)
+	defer cancelWrite()
+	share, err := h.repo.Create(writeCtx, owner, shares.NewShare{
 		TripID: tripID, Mode: input.mode, Title: input.title, Description: input.description, Photos: selected,
 	})
 	switch {
@@ -424,12 +435,18 @@ func (h *shareHandlers) publicMap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many map requests; try again shortly")
 		return
 	}
-	points, err := h.repo.PublicPoints(r.Context(), box[0], box[1], box[2], box[3], publicPointLimit)
+	// Fetch one extra row to distinguish a complete result from a capped input.
+	points, err := h.repo.PublicPoints(r.Context(), box[0], box[1], box[2], box[3], publicPointLimit+1)
 	if err != nil {
 		uploadInternalError(w, "public map", err)
 		return
 	}
-	clusters, truncated := shares.ClusterPoints(points, zoom, shares.ClusterLimit)
+	inputTruncated := len(points) > publicPointLimit
+	if inputTruncated {
+		points = points[:publicPointLimit]
+	}
+	clusters, clustersTruncated := shares.ClusterPoints(points, zoom, shares.ClusterLimit)
+	truncated := inputTruncated || clustersTruncated
 
 	// Sign each distinct cover once.
 	index := make(map[string]int)
