@@ -104,6 +104,9 @@ run_constraints
 log "Checking repeated migration application"
 migrate up
 
+log "Rolling back label-attempts migration (00009)"
+migrate down
+
 log "Rolling back share-report migration (00008)"
 migrate down
 

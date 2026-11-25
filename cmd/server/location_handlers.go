@@ -300,3 +300,38 @@ func (l *rateLimiter) allow() bool {
 	l.tokens--
 	return true
 }
+
+const (
+	// labelRetriesPerListing bounds provider calls one trip listing can make.
+	labelRetriesPerListing = 5
+	// labelRetryBudget bounds how long a listing waits for retries.
+	labelRetryBudget = 4 * time.Second
+)
+
+// retryPendingLabels gives pending labels in a trip another chance (design
+// doc 7.3) before its first page is listed. It never fails the listing: an
+// error or a slow provider just leaves the labels pending for next time.
+func (h *uploadHandlers) retryPendingLabels(ctx context.Context, owner, tripID uuid.UUID) {
+	if h.places == nil {
+		return
+	}
+	candidates, err := h.photos.ClaimLabelRetries(context.WithoutCancel(ctx), owner, tripID, labelRetriesPerListing)
+	if err != nil {
+		log.Printf("trip %s: claim label retries: %v", tripID, err)
+		return
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	budget, cancel := context.WithTimeout(ctx, labelRetryBudget)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, photo := range candidates {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.suggestLabels(budget, photo)
+		}()
+	}
+	wg.Wait()
+}

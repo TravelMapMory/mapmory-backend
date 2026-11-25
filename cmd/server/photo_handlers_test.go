@@ -28,6 +28,27 @@ type photoRepositoryFake struct {
 	finishErr error
 
 	onRelocate func(context.Context)
+	attempts   map[uuid.UUID]int
+}
+
+func (f *photoRepositoryFake) ClaimLabelRetries(_ context.Context, owner, tripID uuid.UUID, limit int) ([]photos.Photo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.attempts == nil {
+		f.attempts = make(map[uuid.UUID]int)
+	}
+	claimed := make([]photos.Photo, 0)
+	for id, photo := range f.photos {
+		if owner != f.owner || photo.TripID != tripID || len(claimed) == limit {
+			break
+		}
+		processed := photo.State == photos.StateReady || photo.State == photos.StateNeedsLocation
+		if processed && photo.Lat != nil && photo.LabelStatus == photos.LabelPending && f.attempts[id] < photos.MaxLabelRetries {
+			f.attempts[id]++
+			claimed = append(claimed, *photo)
+		}
+	}
+	return claimed, nil
 }
 
 func newPhotoRepositoryFake(owner, tripID uuid.UUID) *photoRepositoryFake {
