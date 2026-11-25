@@ -39,6 +39,13 @@ type storeFake struct {
 	objects map[string]storedObject
 	writes  int
 	reads   int
+	deleted []string
+}
+
+func (s *storeFake) Delete(_ context.Context, object string) error {
+	s.deleted = append(s.deleted, object)
+	delete(s.objects, object)
+	return nil
 }
 
 type storedObject struct {

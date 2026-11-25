@@ -367,7 +367,13 @@ func newConfiguredHandler(
 	// Persistent trip routes require both verified Firebase identity and
 	// resolved application-user identity. The legacy handler is used only
 	// when database-backed mode is disabled.
-	handler := withPlaceSearch(newPersistentHandler(verifier, dependencies.users, dependencies.trips, uploadRoutes), searcher)
+	deletion := &deletionHandlers{repo: dependencies.erasure}
+	if store != nil {
+		deletion.store = store
+	}
+	handler := withPlaceSearch(withDeletion(
+		newPersistentHandler(verifier, dependencies.users, dependencies.trips, uploadRoutes),
+		verifier, dependencies.users, deletion), searcher)
 	if localStore != nil {
 		mux := http.NewServeMux()
 		mux.Handle(photostorage.LocalPath, localStore)

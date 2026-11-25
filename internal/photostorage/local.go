@@ -320,3 +320,20 @@ func (s *Local) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", meta.ContentType)
 	http.ServeFile(w, r, path)
 }
+
+// Delete removes an object and its metadata. A missing object is not an error.
+func (s *Local) Delete(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := s.path(name)
+	if err != nil {
+		return err
+	}
+	for _, file := range []string{path, path + ".meta"} {
+		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}

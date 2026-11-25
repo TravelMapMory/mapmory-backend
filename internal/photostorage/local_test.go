@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -140,5 +141,34 @@ func TestLocalStorageValidation(t *testing.T) {
 	}
 	if _, err := s.Read(context.Background(), name, 5); !errors.Is(err, ErrObjectNotFound) {
 		t.Fatalf("missing=%v", err)
+	}
+}
+
+func TestLocalDeleteRemovesObjectAndMetadata(t *testing.T) {
+	s, err := NewLocal(t.TempDir(), "http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	name := "display/00000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002.jpg"
+	if err := s.Write(ctx, name, "image/jpeg", []byte("jpeg")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(ctx, name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Stat(ctx, name); !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("after delete: err=%v", err)
+	}
+	path, _ := s.path(name)
+	if _, err := os.Stat(path + ".meta"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("metadata left behind: %v", err)
+	}
+	// Deleting again, or something never stored, succeeds; a bad name does not.
+	if err := s.Delete(ctx, name); err != nil {
+		t.Fatalf("second delete: %v", err)
+	}
+	if err := s.Delete(ctx, "../outside"); err == nil {
+		t.Fatal("deleted an invalid name")
 	}
 }

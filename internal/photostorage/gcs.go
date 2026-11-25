@@ -60,6 +60,9 @@ type Store interface {
 	Read(ctx context.Context, objectName string, limit int64) ([]byte, error)
 	Write(ctx context.Context, objectName, contentType string, data []byte) error
 	SignDisplay(objectName string) (url string, expiresAt time.Time, err error)
+	// Delete removes an object. A missing object is not an error, so
+	// deleting twice, or deleting what was never uploaded, succeeds.
+	Delete(ctx context.Context, objectName string) error
 }
 
 // GCS implements Store. URLs are signed without a service-account key,
@@ -218,6 +221,18 @@ func (g *GCS) Write(ctx context.Context, objectName, contentType string, data []
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("write object: %w", err)
+	}
+	return nil
+}
+
+// Delete removes an object and forgets any cached display signature for it.
+func (g *GCS) Delete(ctx context.Context, objectName string) error {
+	g.mu.Lock()
+	delete(g.display, objectName)
+	g.mu.Unlock()
+	err := g.bucket.Object(objectName).Delete(ctx)
+	if err != nil && !errors.Is(err, storage.ErrObjectNotExist) {
+		return fmt.Errorf("delete object: %w", err)
 	}
 	return nil
 }

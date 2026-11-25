@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MapMory — minimal private-flow draft
-  version: 0.0.9
+  version: 0.0.10
   description: |-
     PROPOSED, pending team review. Version 0.0.9 documents the
     implemented private trip, photo and sharing APIs, including
@@ -236,6 +236,27 @@ paths:
           $ref: '#/components/responses/500'
       tags:
       - Trips
+    delete:
+      operationId: deleteTrip
+      summary: Delete a trip and everything in it
+      description: 'Owner only (design doc 2.2 use case 6, 3.4). Removes the trip,
+        all its photos, upload batches and shares in one transaction, so its share
+        links stop working at once, then deletes the original and display images from
+        storage. Already-issued signed display URLs expire within an hour. A trip of
+        another user returns 404.'
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Trips
   /trips/{trip_id}/photos:
     parameters:
     - name: trip_id
@@ -385,6 +406,25 @@ paths:
           $ref: '#/components/responses/503'
       tags:
       - Photos
+  /me:
+    delete:
+      operationId: deleteAccount
+      summary: Delete the caller's MapMory account data
+      description: 'Removes every trip of the caller as deleteTrip does, then the
+        application-user record (design doc 3.6). The Firebase sign-in identity is
+        deleted by the client afterwards; signing in again with it starts a new,
+        empty account.'
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/401'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Trips
   /me/summary:
     get:
       operationId: getSummary
