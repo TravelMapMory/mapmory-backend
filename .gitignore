@@ -25,3 +25,6 @@ coverage.txt
 
 # macOS
 .DS_Store
+
+# Development-only photo objects
+/.local-photos/
