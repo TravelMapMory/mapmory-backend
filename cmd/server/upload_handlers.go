@@ -37,6 +37,8 @@ type uploadHandlers struct {
 	// overview serves trip aggregates, the owner map and the Dashboard
 	// summary; nil hides those routes.
 	overview photos.Overview
+	// shares serves link and public shares; nil hides those routes.
+	shares *shareHandlers
 }
 
 func newUploadHandlers(tripRepo trips.Repository, batches uploads.Repository, photoRepo photos.Repository, store photostorage.Store) *uploadHandlers {

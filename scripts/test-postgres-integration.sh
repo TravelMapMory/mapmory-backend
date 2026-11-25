@@ -18,6 +18,7 @@ TEST_PACKAGES=(
   ./internal/trips
   ./internal/uploads
   ./internal/photos
+  ./internal/shares
   ./cmd/server
 )
 

@@ -1,7 +1,6 @@
 # Deployment
 
-Every merge to `main` in `mapmory-backend` or `mapmory-frontend` ships to
-**https://mapmory.app** within about two minutes. Nobody deploys by hand.
+The configured CI and VM updater publish `main` images for `mapmory-backend` and `mapmory-frontend` to **https://mapmory.app**. The VM checks for new images approximately every minute; deployment is not equivalent to enabling database mode or validating the complete photo-sharing flow.
 
 ## How a release happens
 
@@ -56,8 +55,15 @@ slow or re-run job) pushes `:<sha>` but leaves `:main` alone.
 | `MAPMORY_PHOTO_BUCKET` | `mapmory-2026-photos` | Private bucket for photo originals and display images; enables the upload and photo routes in database mode |
 
 `MAPMORY_UPLOAD_SIGNER` stays unset on the VM: the API detects `mapmory-vm` from
-the metadata server, uses it for storage and signs through the IAM Credentials API. Upload routes
-exist only in database mode, which the VM does not enable yet.
+the metadata server, uses it for storage and signs through the IAM Credentials API. Upload, photo, overview and sharing routes exist only in database mode, which the `cloud-init.yaml` configuration shown here **does not enable**: it does not pass `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` or `DATABASE_URL`. Merely configuring the photo bucket does not register those routes.
+
+### Database-backed API and sharing (not yet enabled in this VM configuration)
+
+To enable the private flow, the deployment must additionally provide `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` and a working, securely supplied `DATABASE_URL` for PostgreSQL. Apply the Goose schema through migration `00007_create_shares.sql` **before** deploying code that depends on sharing. Treat the database URL as a secret; do not commit it to `cloud-init.yaml`, CI output or image layers. Ensure that the VM can reach PostgreSQL securely and that the database is backed up.
+
+With a configured private bucket, the API also needs permission to upload/download objects and to issue signed URLs. Validate `MAPMORY_UPLOAD_SIGNER` or VM service-account signing permissions separately; `GEOAPIFY_API_KEY` is optional for suggested place labels and place search but must stay server-side. A correct image deployment does not itself prove these permissions.
+
+After configuration, verify with two Firebase test accounts: owner isolation, a real upload and display image, share creation, anonymous recipient access, and revocation. Newly revoked shares reject subsequent API lookups, but already issued signed GCS URLs can remain accessible until they expire. Use the isolated integration harness for rollback tests; **never** run migration rollback on the deployed database.
 
 No service-account key is needed. Token verification only fetches Google's public
 certificates, and the Firebase Admin SDK's startup credential lookup is satisfied by

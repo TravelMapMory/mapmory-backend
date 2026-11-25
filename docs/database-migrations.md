@@ -43,25 +43,21 @@ The username, password, and disabled TLS setting in the local guide are strictly
 
 ## 3. Migration structure
 
-SQL migrations are stored in:
+SQL migrations are stored in `db/migrations/` and currently run through version **00007**:
 
-```text
-db/
-└── migrations/
-    ├── 00001_create_users_and_trips.sql
-    └── 00002_reject_whitespace_only_trip_titles.sql
-```
+| Version | Main change |
+| --- | --- |
+| `00001_create_users_and_trips.sql` | Users, owner-scoped trips, UUID/timestamp defaults and ownership indexes |
+| `00002_reject_whitespace_only_trip_titles.sql` | Stronger check for common ASCII whitespace-only trip titles |
+| `00003_create_upload_batches_and_photos.sql` | Upload batches, photo records, ownership relationships and file constraints |
+| `00004_add_photo_processing_fields.sql` | Processing state, errors, timestamps, EXIF/effective coordinates and display-object references |
+| `00005_order_photos_by_capture_time.sql` | Capture-order and recent-upload indexes |
+| `00006_add_photo_place_labels.sql` | Country/city/place labels, provider attribution and confirmation status |
+| `00007_create_shares.sql` | Link/public shares, selected photos, stored coarse coordinates and database constraints |
 
-MapMory uses sequential migration numbers and Goose's SQL annotations.
+Migration 00007 uses composite foreign keys to ensure that a selected photo belongs to the share's trip. The share token is unique and share/photo relationships are indexed. The HTTP layer separately checks that selected photos are processed.
 
-The initial migration creates:
-
-- `users`: internal UUID, unique Firebase authentication subject, display name, and creation timestamp.
-- `trips`: internal UUID, owner foreign key, title, notes, and creation timestamp.
-
-It also creates an index supporting owner-scoped trip listing. Migration `00002` tightens the trip-title check to reject common ASCII whitespace-only values (including tabs and newlines); it does not cover every Unicode whitespace character. Go HTTP validation also trims and rejects blank titles.
-
-The `photos` and `upload_batches` tables are intentionally deferred.
+Migrations already applied to shared databases must not be changed or renumbered. Add a new migration for future changes.
 
 ### Creating a migration
 
@@ -132,7 +128,7 @@ On an explicitly disposable database only:
 goose -dir db/migrations postgres "$DATABASE_URL" down
 ```
 
-`down` reverts one applied migration. For migration `00002`, one `down` restores the prior title constraint; another `down` would drop the tables from `00001`, including their contents. Never run this sequence against a shared database.
+`down` reverts the latest applied migration, currently `00007` on a fully migrated database. Repeating it rolls back earlier migrations; later steps can drop sharing, photo, trip and user tables and data. Never run this sequence against a shared database.
 
 Do not use `down`, `reset`, or `redo` as routine production recovery commands. Production schema changes require a deliberate migration and recovery plan.
 
@@ -155,6 +151,7 @@ The SQL test file checks:
 - Required, nonblank trip titles.
 - Default trip notes.
 - Restricted deletion of users who own trips.
+- Photo object uniqueness and relevant photo processing constraints (in the current SQL constraint script).
 
 First, ensure the local PostgreSQL container is running and migrations have been applied:
 
@@ -209,13 +206,13 @@ The script:
 3. Applies the migrations.
 4. Executes `db/tests/schema_constraints.sql`.
 5. Repeats `goose up` to verify that no migrations remain pending.
-6. Rolls back both migrations one at a time and checks that the application tables were removed.
-7. Reapplies both migrations and reruns the SQL tests.
+6. Rolls back migrations 00007 through 00001 in order and verifies that application tables were removed.
+7. Reapplies all seven migrations and reruns the SQL tests.
 8. Removes the temporary container, including when a command fails.
 
 Unlike the standalone SQL test, the lifecycle script creates and manages its own database. It does not use the caller's `DATABASE_URL`, so it cannot accidentally roll back the normal local development database through that variable.
 
-The lifecycle script currently exercises both migrations explicitly. When adding a further migration, update its rollback sequence and assertions.
+The lifecycle script currently exercises all seven migrations. When adding another migration, update its rollback sequence and assertions.
 
 ### CI
 
@@ -235,14 +232,10 @@ Database migration testing is independent of ordinary Go unit tests and requires
 - Test destructive migration operations only on isolated, disposable databases.
 - Never commit actual database credentials or use local testing commands against production.
 
-The schema is independent of application repositories; the current user repository is implemented in `internal/users`.
+The schema is independent of application repositories; PostgreSQL-backed users, trips, uploads, photos and shares are implemented in their corresponding `internal/` packages.
 
 ## 7. Related work
 
-This database foundation supports:
+The migrated schema supports authenticated application users, owner-scoped trips, upload processing, photo metadata/place labels and fixed link/public shares.
 
-- **Backend #32:** Resolving verified Firebase UIDs into internal user records.
-- **Backend #17:** Persisting trips using PostgreSQL.
-- **Backend #9:** Enforcing owner-only access to trips.
-
-User resolution now exists separately under backend #32. Owner-scoped trip operations and HTTP integration tests are implemented on the trip-persistence branch. Photo/upload schema, Cloud SQL provisioning, and production migration execution remain separate work.
+Run `./scripts/test-postgres-integration.sh` to exercise these repositories against a disposable PostgreSQL instance with Go's race detector. Local migration and integration results do **not** establish that migrations have been executed on the production database or that the deployed VM is configured for database mode. See [Deployment](../deploy/README.md).

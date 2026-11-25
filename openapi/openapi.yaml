@@ -1,12 +1,12 @@
 openapi: 3.1.0
 info:
   title: MapMory — minimal private-flow draft
-  version: 0.0.8
+  version: 0.0.9
   description: |-
-    PROPOSED, pending team review. Version 0.0.8 documents the implemented
-    private trip and photo APIs, including authenticated, owner-scoped trip
-    management, photo uploads, place labels, location correction, the owner
-    map, Dashboard summaries and place search.
+    PROPOSED, pending team review. Version 0.0.9 documents the
+    implemented private trip, photo and sharing APIs, including
+    authenticated owner operations, link and public shares,
+    the public map, place labels and location correction.
 
     In PostgreSQL database mode, the backend resolves Firebase identities
     to persistent application-user UUIDs and enforces ownership on private
@@ -61,8 +61,22 @@ info:
     - The owner map orders located photos by capture time, newest first,
       and returns at most 2,000 results.
 
-    Cursor-based trip pagination remains a proposal. Sharing, deletion
-    and the failed-photo retry route are outside this draft.
+    Sharing:
+    - Owners can create and revoke fixed photo selections as link or public shares.
+    - Recipients receive selected display images and stored coarse positions,
+      not original EXIF positions or private trip metadata.
+    - City-centre lookups have a ten-second total budget per share creation;
+      unsuccessful lookups fall back to coordinates rounded to 0.01 degrees.
+    - Revocation prevents new lookups after it is committed. In-flight
+      responses may complete, and previously issued signed image URLs may
+      remain accessible until their expiry.
+    - The public map clusters at most 20,000 matching share-photo records,
+      returning at most 200 clusters. truncated is true if either limit is
+      exceeded. When input is capped, counts and rankings reflect only
+      the retained records, ordered by share ID and photo ID.
+
+    Cursor-based trip pagination, photo deletion and the failed-photo retry
+    route remain proposals.
 
     Open questions:
     - How should batch registration recover from a lost response: an
@@ -489,6 +503,204 @@ paths:
                 $ref: '#/components/schemas/Error'
       tags:
       - Places
+  /trips/{trip_id}/shares:
+    parameters:
+    - name: trip_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: listShares
+      summary: The trip's live shares, newest first
+      responses:
+        '200':
+          description: Unrevoked shares of the caller's trip
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShareList'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Sharing
+    post:
+      operationId: createShare
+      summary: Share selected photos by link or publicly
+      description: 'A share is a fixed selection of processed photos of this trip;
+        adding photos to the trip never changes it (design doc 4.2). Each photo''s
+        recipient position is fixed now: its city''s centre when the city is known
+        and the geocoder finds it, otherwise its position rounded to 0.01 degrees.
+        Recipients never receive exact coordinates. The response carries the link
+        token, which only the owner receives.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateShare'
+      responses:
+        '201':
+          description: The new share
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Share'
+        '400':
+          $ref: '#/components/responses/400'
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Sharing
+  /shares/{share_id}:
+    parameters:
+    - name: share_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    delete:
+      operationId: revokeShare
+      summary: Revoke a link or unpublish a public share
+      description: >-
+        Revokes a share without deleting its photos. New lookups after
+        revocation are rejected and live public-map queries exclude it.
+        In-flight responses may complete and previously issued signed image
+        URLs remain valid until their own expiration. Repeated revocation
+        by the owner succeeds.
+      responses:
+        '204':
+          description: Revoked
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          $ref: '#/components/responses/503'
+      tags:
+      - Sharing
+  /s/{token}:
+    parameters:
+    - name: token
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 22
+    get:
+      operationId: getSharedCollection
+      summary: What anyone holding the link sees
+      description: No account needed. Only the selected photos, at coarse positions,
+        with display images; never the trip, its notes, other photos, exact coordinates
+        or EXIF. Responses are not cacheable.
+      security: []
+      responses:
+        '200':
+          description: The shared collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedCollection'
+        '404':
+          $ref: '#/components/responses/404'
+        '410':
+          description: 'The owner revoked the link; error.code: share_revoked.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Sharing
+  /public/shares/{share_id}:
+    parameters:
+    - name: share_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      operationId: getPublicShare
+      summary: A live public share
+      security: []
+      responses:
+        '200':
+          description: The public collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedCollection'
+        '404':
+          $ref: '#/components/responses/404'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Sharing
+  /public/map:
+    get:
+      operationId: getPublicMap
+      summary: Clusters of public photos in the visible area
+      description: >-
+        No account needed; rate-limited and non-cacheable. Active public
+        share-photo records inside bbox are grouped into 64 px Web Mercator
+        cells at zoom. Up to 20,000 matching records are clustered and the
+        200 largest clusters returned. truncated is true when more input
+        records or clusters were omitted. If input was capped, counts and
+        rankings reflect only the retained, share-ID/photo-ID-ordered records,
+        not necessarily the globally fullest clusters. Positions are the
+        stored coarse shared positions.
+      security: []
+      parameters:
+      - name: bbox
+        in: query
+        required: true
+        schema:
+          type: string
+        description: west,south,east,north; west greater than east crosses the antimeridian.
+      - name: zoom
+        in: query
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 22
+      responses:
+        '200':
+          description: Public clusters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicMapPage'
+        '400':
+          $ref: '#/components/responses/400'
+        '429':
+          description: 'Too many requests; error.code: rate_limited.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/500'
+      tags:
+      - Sharing
   /trips/{trip_id}/batches:
     parameters:
     - name: trip_id
@@ -1378,6 +1590,236 @@ components:
           items:
             $ref: '#/components/schemas/Photo'
       title: MeSummary
+    CreateShare:
+      type: object
+      additionalProperties: false
+      required:
+      - mode
+      - title
+      - photo_ids
+      properties:
+        mode:
+          type: string
+          enum:
+          - link
+          - public
+        title:
+          type: string
+          description: 1 to 120 characters after trimming.
+        description:
+          type: string
+          description: At most 600 characters; blank means none.
+        photo_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: string
+            format: uuid
+          description: Processed photos of this trip; duplicates are ignored.
+      title: CreateShare
+    Share:
+      type: object
+      required:
+      - id
+      - trip_id
+      - mode
+      - title
+      - description
+      - photo_ids
+      - token
+      - created_at
+      - revoked_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        trip_id:
+          type: string
+          format: uuid
+        mode:
+          type: string
+          enum:
+          - link
+          - public
+        title:
+          type: string
+        description:
+          type:
+          - string
+          - 'null'
+        photo_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        token:
+          type: string
+          description: 128 random bits. The recipient address is /s/{token} on the
+            frontend origin. Only the owner receives it.
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+      title: Share
+    ShareList:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Share'
+      title: ShareList
+    SharedPhoto:
+      type: object
+      required:
+      - id
+      - display_image
+      - capture_time_local
+      - city
+      - country
+      - display_lat
+      - display_lng
+      properties:
+        id:
+          type: string
+          format: uuid
+        display_image:
+          $ref: '#/components/schemas/NullableDisplayImage'
+        capture_time_local:
+          type:
+          - string
+          - 'null'
+        city:
+          type:
+          - string
+          - 'null'
+        country:
+          type:
+          - string
+          - 'null'
+        display_lat:
+          type:
+          - number
+          - 'null'
+          description: City centre, or the position rounded to 0.01 degrees; never exact.
+        display_lng:
+          type:
+          - number
+          - 'null'
+      title: SharedPhoto
+    SharedCollection:
+      type: object
+      required:
+      - title
+      - description
+      - created_at
+      - photos
+      properties:
+        title:
+          type: string
+        description:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+        photos:
+          type: array
+          items:
+            $ref: '#/components/schemas/SharedPhoto'
+          description: In capture order.
+      title: SharedCollection
+    PublicShareRef:
+      type: object
+      required:
+      - id
+      - title
+      - cover_url
+      - photo_count
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        cover_url:
+          type:
+          - string
+          - 'null'
+        photo_count:
+          type: integer
+          description: Photos of this share inside the cluster.
+      title: PublicShareRef
+    PublicCluster:
+      type: object
+      required:
+      - id
+      - lat
+      - lng
+      - count
+      - label
+      - cover_url
+      - bounds
+      - share_count
+      - shares
+      properties:
+        id:
+          type: string
+          examples:
+          - 4/131/85
+        lat:
+          type: number
+        lng:
+          type: number
+        count:
+          type: integer
+          description: Distinct public photos in the cell.
+        label:
+          type:
+          - string
+          - 'null'
+          description: Most common city, else most common country.
+        cover_url:
+          type:
+          - string
+          - 'null'
+        bounds:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: number
+          description: west, south, east, north of the photos' positions.
+        share_count:
+          type: integer
+        shares:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/PublicShareRef'
+      title: PublicCluster
+    PublicMapPage:
+      type: object
+      required:
+      - clusters
+      - truncated
+      properties:
+        clusters:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/PublicCluster'
+        truncated:
+          type: boolean
+      title: PublicMapPage
     LabelStatus:
       type: string
       enum:
@@ -1475,3 +1917,5 @@ tags:
   description: File registration, completion and status
 - name: Places
   description: World place search
+- name: Sharing
+  description: Link shares, public shares and the public map
