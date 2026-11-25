@@ -29,6 +29,8 @@ func loadLocalEnv(path string) error {
 		"MAPMORY_ENABLE_DB_USER_RESOLUTION": true,
 		"DATABASE_URL":                      true,
 		"MAPMORY_PHOTO_BUCKET":              true,
+		"MAPMORY_PHOTO_STORAGE":             true,
+		"MAPMORY_LOCAL_PHOTO_DIR":           true,
 		"MAPMORY_UPLOAD_SIGNER":             true,
 		"GEOAPIFY_API_KEY":                  true,
 	}

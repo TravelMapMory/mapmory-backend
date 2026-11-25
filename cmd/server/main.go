@@ -317,32 +317,64 @@ func newConfiguredHandler(
 		log.Printf("GEOAPIFY_API_KEY is not set; place labels stay pending and place search is disabled")
 	}
 
-	// Uploads are optional so that database mode keeps working without a bucket.
+	// Photo storage is optional. Explicit local mode keeps the real database,
+	// processing, overview and sharing pipeline without requiring GCS.
 	var uploadRoutes *uploadHandlers
+	var localStore *photostorage.Local
+	var store photostorage.Store
 	cleanup := func() { _ = db.Close() }
-	if bucket := strings.TrimSpace(os.Getenv("MAPMORY_PHOTO_BUCKET")); bucket != "" {
-		store, err := photostorage.NewGCS(ctx, bucket, strings.TrimSpace(os.Getenv("MAPMORY_UPLOAD_SIGNER")))
+	switch strings.TrimSpace(os.Getenv("MAPMORY_PHOTO_STORAGE")) {
+	case "local":
+		if os.Getenv("MAPMORY_PHOTO_BUCKET") != "" {
+			_ = db.Close()
+			return nil, nil, errors.New("unset MAPMORY_PHOTO_BUCKET when MAPMORY_PHOTO_STORAGE=local")
+		}
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		var err error
+		localStore, err = photostorage.NewLocal(os.Getenv("MAPMORY_LOCAL_PHOTO_DIR"), "http://127.0.0.1:"+port)
 		if err != nil {
 			_ = db.Close()
-			return nil, nil, fmt.Errorf("initialize photo uploads: %w", err)
+			return nil, nil, fmt.Errorf("initialize local photos: %w", err)
 		}
+		store = localStore
+		log.Printf("development-only local photo storage enabled at %s", os.Getenv("MAPMORY_LOCAL_PHOTO_DIR"))
+	case "", "gcs":
+		if bucket := strings.TrimSpace(os.Getenv("MAPMORY_PHOTO_BUCKET")); bucket != "" {
+			gcs, err := photostorage.NewGCS(ctx, bucket, strings.TrimSpace(os.Getenv("MAPMORY_UPLOAD_SIGNER")))
+			if err != nil {
+				_ = db.Close()
+				return nil, nil, fmt.Errorf("initialize photo uploads: %w", err)
+			}
+			store = gcs
+			cleanup = func() { _ = gcs.Close(); _ = db.Close() }
+		} else {
+			log.Printf("photo storage is not configured; photo upload routes are disabled")
+		}
+	default:
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("invalid MAPMORY_PHOTO_STORAGE value %q", os.Getenv("MAPMORY_PHOTO_STORAGE"))
+	}
+	if store != nil {
 		uploadRoutes = newUploadHandlers(dependencies.trips, dependencies.uploads, dependencies.photos, store)
 		uploadRoutes.places = resolver
 		uploadRoutes.overview = dependencies.overview
 		uploadRoutes.shares = newShareHandlers(dependencies.shares, uploadRoutes, searcher)
-		cleanup = func() {
-			_ = store.Close()
-			_ = db.Close()
-		}
-	} else {
-		log.Printf("MAPMORY_PHOTO_BUCKET is not set; photo upload routes are disabled")
 	}
 
 	// Persistent trip routes require both verified Firebase identity and
 	// resolved application-user identity. The legacy handler is used only
 	// when database-backed mode is disabled.
-	return withPlaceSearch(newPersistentHandler(verifier, dependencies.users, dependencies.trips, uploadRoutes), searcher),
-		cleanup, nil
+	handler := withPlaceSearch(newPersistentHandler(verifier, dependencies.users, dependencies.trips, uploadRoutes), searcher)
+	if localStore != nil {
+		mux := http.NewServeMux()
+		mux.Handle(photostorage.LocalPath, localStore)
+		mux.Handle("/", handler)
+		return localDevCORS(mux), cleanup, nil
+	}
+	return handler, cleanup, nil
 }
 
 // withPlaceSearch adds the public, rate-limited GET /api/places/search in
@@ -393,6 +425,9 @@ func run() error {
 	defer cleanup()
 
 	addr := listenAddr()
+	if os.Getenv("MAPMORY_ENABLE_DB_USER_RESOLUTION") == "true" && os.Getenv("MAPMORY_PHOTO_STORAGE") == "local" {
+		addr = "127.0.0.1" + addr // Never expose local object storage externally.
+	}
 	log.Printf("listening on %s", addr)
 
 	if err := http.ListenAndServe(addr, handler); err != nil {
