@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,9 +41,14 @@ type storeFake struct {
 	writes  int
 	reads   int
 	deleted []string
+	// deleteMu guards deleted and objects in Delete, which deletion calls
+	// from several goroutines at once.
+	deleteMu sync.Mutex
 }
 
 func (s *storeFake) Delete(_ context.Context, object string) error {
+	s.deleteMu.Lock()
+	defer s.deleteMu.Unlock()
 	s.deleted = append(s.deleted, object)
 	delete(s.objects, object)
 	return nil
