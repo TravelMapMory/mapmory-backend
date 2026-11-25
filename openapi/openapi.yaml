@@ -61,8 +61,22 @@ info:
     - The owner map orders located photos by capture time, newest first,
       and returns at most 2,000 results.
 
-    Cursor-based trip pagination remains a proposal. Sharing, deletion
-    and the failed-photo retry route are outside this draft.
+    Sharing:
+    - Owners can create and revoke fixed photo selections as link or public shares.
+    - Recipients receive selected display images and stored coarse positions,
+      not original EXIF positions or private trip metadata.
+    - City-centre lookups have a ten-second total budget per share creation;
+      unsuccessful lookups fall back to coordinates rounded to 0.01 degrees.
+    - Revocation prevents new lookups after it is committed. In-flight
+      responses may complete, and previously issued signed image URLs may
+      remain accessible until their expiry.
+    - The public map clusters at most 20,000 matching share-photo records,
+      returning at most 200 clusters. truncated is true if either limit is
+      exceeded. When input is capped, counts and rankings reflect only
+      the retained records, ordered by share ID and photo ID.
+
+    Cursor-based trip pagination, photo deletion and the failed-photo retry
+    route remain proposals.
 
     Open questions:
     - How should batch registration recover from a lost response: an
@@ -562,8 +576,12 @@ paths:
     delete:
       operationId: revokeShare
       summary: Revoke a link or unpublish a public share
-      description: The link stops working at once and the share leaves the public
-        map; the photos stay in the trip. Revoking twice is not an error.
+      description: >-
+        Revokes a share without deleting its photos. New lookups after
+        revocation are rejected and live public-map queries exclude it.
+        In-flight responses may complete and previously issued signed image
+        URLs remain valid until their own expiration. Repeated revocation
+        by the owner succeeds.
       responses:
         '204':
           description: Revoked
@@ -640,10 +658,15 @@ paths:
     get:
       operationId: getPublicMap
       summary: Clusters of public photos in the visible area
-      description: 'No account needed, rate-limited (design doc 5.2). Photos of live
-        public shares inside bbox are grouped into 64 px cells at zoom (Web Mercator),
-        and the 200 fullest cells are returned, largest first; truncated is true when
-        more cells had photos. Positions are the coarse share positions.'
+      description: >-
+        No account needed; rate-limited and non-cacheable. Active public
+        share-photo records inside bbox are grouped into 64 px Web Mercator
+        cells at zoom. Up to 20,000 matching records are clustered and the
+        200 largest clusters returned. truncated is true when more input
+        records or clusters were omitted. If input was capped, counts and
+        rankings reflect only the retained, share-ID/photo-ID-ordered records,
+        not necessarily the globally fullest clusters. Positions are the
+        stored coarse shared positions.
       security: []
       parameters:
       - name: bbox
