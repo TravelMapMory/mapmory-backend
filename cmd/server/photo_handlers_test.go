@@ -113,6 +113,9 @@ func (f *photoRepositoryFake) Fail(_ context.Context, id uuid.UUID, uploadedAt t
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	photo := f.photos[id]
+	if photo == nil || photo.State != photos.StateProcessing {
+		return photos.Photo{}, photos.ErrNotFound
+	}
 	photo.State, photo.ErrorCode, photo.UploadedAt, photo.ProcessingStarted = photos.StateFailed, &code, &uploadedAt, nil
 	return *photo, nil
 }
@@ -127,6 +130,9 @@ func (f *photoRepositoryFake) Finish(_ context.Context, id uuid.UUID, result pho
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	photo := f.photos[id]
+	if photo == nil || photo.State != photos.StateProcessing {
+		return photos.Photo{}, photos.ErrNotFound
+	}
 	photo.State = photos.StateNeedsLocation
 	if result.ExifLat != nil {
 		photo.State = photos.StateReady

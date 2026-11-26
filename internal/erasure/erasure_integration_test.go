@@ -270,3 +270,32 @@ func TestDeletePhotoIntegration(t *testing.T) {
 		t.Fatalf("removed %v, want [%s]", rec.got, objects[2])
 	}
 }
+
+func TestDeletePhotoDuringProcessingIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	repo := NewPostgresRepository(db)
+	ctx := testContext(t)
+	owner := newUser(t, db)
+	tripID, _ := trip(t, db, owner)
+	now := time.Now()
+	quiet := PhotoQuiet{UploadsBefore: now.Add(-20 * time.Minute), ProcessingBefore: now.Add(-10 * time.Minute)}
+
+	processing := photoIDOf(t, db, tripID, "b")
+	exec(t, db, `UPDATE photos SET state = 'processing', processing_started_at = now() WHERE id = $1`, processing)
+	rec := &recorder{}
+	if err := repo.DeletePhoto(ctx, owner, processing, quiet, rec.remove); !errors.Is(err, ErrPhotoBusy) || len(rec.got) != 0 {
+		t.Fatalf("fresh processing: err=%v removed=%v", err, rec.got)
+	}
+
+	// Processing that started an hour ago is stale: the owner may delete.
+	exec(t, db, `UPDATE photos SET processing_started_at = now() - interval '1 hour' WHERE id = $1`, processing)
+	if err := repo.DeletePhoto(ctx, owner, processing, quiet, rec.remove); err != nil {
+		t.Fatalf("stale processing: %v", err)
+	}
+	if len(rec.got) != 1 || len(rec.got[0]) != 1 {
+		t.Fatalf("removed %v, want only the original (no display image yet)", rec.got)
+	}
+	if n := count(t, db, "SELECT count(*) FROM photos WHERE id = $1", processing); n != 0 {
+		t.Fatal("the stale photo row remains")
+	}
+}

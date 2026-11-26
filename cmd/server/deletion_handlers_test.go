@@ -13,7 +13,9 @@ import (
 
 	firebaseauth "firebase.google.com/go/v4/auth"
 	"github.com/TravelMapMory/mapmory-backend/internal/erasure"
+	"github.com/TravelMapMory/mapmory-backend/internal/photos"
 	"github.com/TravelMapMory/mapmory-backend/internal/trips"
+	"github.com/TravelMapMory/mapmory-backend/internal/uploads"
 	"github.com/google/uuid"
 )
 
@@ -310,5 +312,132 @@ func TestDeletePhotoDatabaseFailure(t *testing.T) {
 	response := tripRequest(newDeletionTestHandler(t, repo, store), "DELETE", "/api/photos/"+repo.photoID.String(), "", "Bearer valid")
 	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "secret") || len(store.deleted) != 0 {
 		t.Fatalf("status=%d body=%s deleted=%v", response.Code, response.Body.String(), store.deleted)
+	}
+}
+
+// photoErasure deletes photos of a photoRepositoryFake the way
+// erasure.PostgresRepository does: owner-scoped, busy while an upload URL is
+// valid or processing is fresh, objects first and the row last.
+type photoErasure struct {
+	repo *photoRepositoryFake
+}
+
+func (e photoErasure) DeleteTrip(context.Context, uuid.UUID, uuid.UUID) ([]string, error) {
+	return nil, errors.New("not used")
+}
+
+func (e photoErasure) DeleteAccount(context.Context, uuid.UUID) ([]string, error) {
+	return nil, errors.New("not used")
+}
+
+func (e photoErasure) DeletePhoto(ctx context.Context, owner, id uuid.UUID, quiet erasure.PhotoQuiet, remove erasure.RemoveObjects) error {
+	e.repo.mu.Lock()
+	defer e.repo.mu.Unlock()
+	photo := e.repo.photos[id]
+	if photo == nil || owner != e.repo.owner {
+		return erasure.ErrPhotoNotFound
+	}
+	switch {
+	case photo.State == photos.StatePending && !photo.CreatedAt.Before(quiet.UploadsBefore),
+		photo.State == photos.StateProcessing && (photo.ProcessingStarted == nil || !photo.ProcessingStarted.Before(quiet.ProcessingBefore)):
+		return erasure.ErrPhotoBusy
+	}
+	objects := []string{photo.ObjectName}
+	if photo.DisplayObjectName != nil {
+		objects = append(objects, *photo.DisplayObjectName)
+	}
+	if err := remove(ctx, objects); err != nil {
+		return fmt.Errorf("%w: %w", erasure.ErrCleanup, err)
+	}
+	delete(e.repo.photos, id)
+	return nil
+}
+
+// Review of backend #69: processing that has gone stale may still write its
+// display image after the owner deleted the photo. It must find the photo gone
+// and remove that image, so no object outlives the deletion.
+func TestDeletionDuringStaleProcessingLeavesNoObjects(t *testing.T) {
+	env := newPhotoTestEnv(t)
+	photo := env.registerUploaded("a", readFixture(t, "gps.jpg"))
+	displayName := uploads.DisplayObjectName(env.tripID, photo.ID)
+
+	verifier := endpointVerifierFunc(func(_ context.Context, token string) (*firebaseauth.Token, error) {
+		if token != "valid" {
+			return nil, errors.New("invalid token")
+		}
+		return &firebaseauth.Token{UID: "subject-a"}, nil
+	})
+	resolver := endpointResolverFunc(func(context.Context, string) (uuid.UUID, error) { return env.owner, nil })
+	// The owner deletes 20 minutes into the processing, when it counts as stale.
+	later := time.Now().Add(20 * time.Minute)
+	deletion := withDeletion(http.NotFoundHandler(), verifier, resolver, &deletionHandlers{
+		repo: photoErasure{repo: env.repo}, store: env.store, now: func() time.Time { return later },
+	})
+
+	deleted := 0
+	env.store.beforeWrite = func(object string) {
+		if object != displayName || deleted > 0 {
+			return
+		}
+		// The processing request has claimed the photo and rendered the
+		// display image; before it is written, the owner deletes the photo.
+		if state := env.repo.get(photo.ID).State; state != photos.StateProcessing {
+			t.Errorf("state=%s before the display write, want processing", state)
+		}
+		response := tripRequest(deletion, "DELETE", "/api/photos/"+photo.ID.String(), "", "Bearer valid")
+		if response.Code != http.StatusNoContent {
+			t.Errorf("delete during stale processing: status=%d body=%s", response.Code, response.Body.String())
+		}
+		deleted++
+	}
+
+	_, status, body := env.complete("a")
+	if deleted != 1 {
+		t.Fatalf("the deletion did not run during processing (%d)", deleted)
+	}
+	if status != http.StatusNotFound {
+		t.Fatalf("processing a deleted photo: status=%d body=%s", status, body)
+	}
+	for _, object := range []string{photo.ObjectName, displayName} {
+		if _, ok := env.store.objects[object]; ok {
+			t.Errorf("%s outlived the deletion", object)
+		}
+	}
+	if _, err := env.repo.GetByClientFile(context.Background(), env.owner, env.batchID, "a"); !errors.Is(err, photos.ErrNotFound) {
+		t.Fatalf("photo row after deletion: err=%v", err)
+	}
+}
+
+// Fresh processing is not stale: deleting then is refused, so the processor
+// can finish normally and nothing is removed under it.
+func TestDeletionDuringFreshProcessingIsRefused(t *testing.T) {
+	env := newPhotoTestEnv(t)
+	photo := env.registerUploaded("a", readFixture(t, "gps.jpg"))
+	verifier := endpointVerifierFunc(func(context.Context, string) (*firebaseauth.Token, error) {
+		return &firebaseauth.Token{UID: "subject-a"}, nil
+	})
+	resolver := endpointResolverFunc(func(context.Context, string) (uuid.UUID, error) { return env.owner, nil })
+	deletion := withDeletion(http.NotFoundHandler(), verifier, resolver, &deletionHandlers{
+		repo: photoErasure{repo: env.repo}, store: env.store, now: time.Now,
+	})
+
+	refused := false
+	env.store.beforeWrite = func(string) {
+		if refused {
+			return
+		}
+		response := tripRequest(deletion, "DELETE", "/api/photos/"+photo.ID.String(), "", "Bearer valid")
+		refused = response.Code == http.StatusConflict && strings.Contains(response.Body.String(), `"photo_busy"`)
+	}
+
+	got, status, body := env.complete("a")
+	if !refused {
+		t.Fatal("deleting during fresh processing was not refused with 409 photo_busy")
+	}
+	if status != http.StatusOK || got.State != photos.StateReady {
+		t.Fatalf("processing after a refused deletion: status=%d body=%s", status, body)
+	}
+	if _, ok := env.store.objects[photo.ObjectName]; !ok {
+		t.Fatal("a refused deletion removed the original")
 	}
 }

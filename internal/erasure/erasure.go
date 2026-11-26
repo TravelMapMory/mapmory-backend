@@ -28,7 +28,9 @@ var ErrPhotoNotFound = errors.New("photo not found")
 var ErrPhotoBusy = errors.New("photo is still uploading or processing")
 
 // ErrCleanup wraps a storage failure while removing a photo's objects. The
-// photo row is kept, so repeating the deletion completes it.
+// photo row is kept, but objects removed before the failure stay removed: the
+// deletion is retryable, not atomic. Repeating it completes it, because
+// removing a missing object succeeds.
 var ErrCleanup = errors.New("photo objects could not be removed")
 
 // Photo states DeletePhoto distinguishes (see the photos package).
@@ -65,10 +67,13 @@ type Repository interface {
 	// DeletePhoto removes one of the caller's photos and nothing else; the
 	// trip, its other photos and its shares stay. The photo row is locked,
 	// remove deletes its original and display image, and only then is the row
-	// deleted, so a storage failure (ErrCleanup) changes nothing that a retry
-	// cannot finish, and no upload or processing can write to the photo
-	// meanwhile. Share selections drop the photo by ON DELETE CASCADE; trip
-	// covers, counts and map results are derived from the remaining photos.
+	// deleted. This is retryable, not atomic: after ErrCleanup the row remains
+	// but some objects may already be gone, and a repeated call finishes the
+	// job. The lock keeps other requests from changing the row meanwhile; it
+	// cannot stop stale processing from writing a display object to storage,
+	// which that processing removes itself once it finds the row gone. Share
+	// selections drop the photo by ON DELETE CASCADE; trip covers, counts and
+	// map results are derived from the remaining photos.
 	// It returns ErrPhotoNotFound, ErrPhotoBusy or ErrCleanup.
 	DeletePhoto(ctx context.Context, ownerID, photoID uuid.UUID, quiet PhotoQuiet, remove RemoveObjects) error
 }

@@ -44,6 +44,8 @@ type storeFake struct {
 	// deleteMu guards deleted and objects in Delete, which deletion calls
 	// from several goroutines at once.
 	deleteMu sync.Mutex
+	// beforeWrite runs at the start of Write, as a concurrent request would.
+	beforeWrite func(object string)
 }
 
 func (s *storeFake) Delete(_ context.Context, object string) error {
@@ -101,6 +103,9 @@ func (s *storeFake) Read(_ context.Context, object string, limit int64) ([]byte,
 }
 
 func (s *storeFake) Write(_ context.Context, object, contentType string, data []byte) error {
+	if s.beforeWrite != nil {
+		s.beforeWrite(object)
+	}
 	s.writes++
 	if s.err != nil {
 		return s.err

@@ -59,7 +59,8 @@ func (h *deletionHandlers) clock() time.Time {
 
 // removePhotoObjects deletes one photo's objects before its row goes, retrying
 // each a few times. Any object still present after that fails the whole
-// deletion, which leaves the row in place for the owner to retry: a photo is
+// deletion and leaves the row in place for the owner to retry; objects
+// removed before the failure stay removed (retryable, not atomic). A photo is
 // never reported deleted while one of its images remains in storage.
 func (h *deletionHandlers) removePhotoObjects(ctx context.Context, objects []string) error {
 	if h.store == nil {

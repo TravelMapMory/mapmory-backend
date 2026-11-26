@@ -80,10 +80,19 @@ info:
       photos and its shares stay. Shares stop including the photo at once;
       trip covers, counts, review counts and map results are computed from
       the remaining photos.
-    - The original and display images are removed from storage before the
-      photo record, so 204 means both are gone. If storage fails, the photo
-      is kept and 503 storage_unavailable is returned; repeating the request
-      completes the deletion.
+    - Deletion is retryable but not atomic: object storage and the database
+      cannot change together. The original and display images are removed
+      from storage first and the photo record last, so 204 means the record
+      and both images are gone. If removing an image fails, 503
+      storage_unavailable is returned and the record is kept, but an image
+      removed before the failure stays removed: the photo can then show no
+      image until the deletion is repeated. Removing an object that is
+      already gone succeeds, so repeating the request completes the
+      deletion.
+    - Processing that was stale when the photo was deleted can still write a
+      display image afterwards. It then finds the record gone and removes
+      that image itself; if that removal also fails, the image is left
+      unreferenced and is only logged.
     - A photo whose upload URL is still valid (registered less than 20
       minutes ago and not processed) or that another request is processing
       returns 409 photo_busy, because its file could otherwise be written
@@ -375,13 +384,15 @@ paths:
         and shares stay, and shares stop including the photo. A photo of another
         user returns 404, exactly like a photo that does not exist, including one
         already deleted. A photo still uploading (its upload URL may be in use) or
-        being processed returns 409 photo_busy; try again in a few minutes. A
-        storage failure returns 503 storage_unavailable and keeps the photo, so the
-        request can simply be repeated. Display URLs issued earlier stay valid
-        until they expire.'
+        being processed returns 409 photo_busy; try again in a few minutes. The
+        deletion is retryable but not atomic: the images are removed before the
+        record, so a storage failure (503 storage_unavailable) keeps the record but
+        may already have removed one or both images. Repeating the request
+        completes the deletion. Display URLs issued earlier stay valid until they
+        expire.'
       responses:
         '204':
-          description: Deleted, with its stored images
+          description: Deleted; the record and both stored images are gone
         '401':
           $ref: '#/components/responses/401'
         '404':
@@ -401,9 +412,11 @@ paths:
         '500':
           $ref: '#/components/responses/500'
         '503':
-          description: 'Temporary failure; nothing was deleted and the request can
-            be repeated. error.code: storage_unavailable (the images could not be
-            removed), auth_unavailable or user_resolution_unavailable.'
+          description: 'Temporary failure; repeat the request. error.code
+            storage_unavailable means an image could not be removed: the photo record
+            is kept, but an image removed before the failure stays removed, so the
+            photo may have no image until the deletion completes. auth_unavailable
+            and user_resolution_unavailable change nothing.'
           content:
             application/json:
               schema:
