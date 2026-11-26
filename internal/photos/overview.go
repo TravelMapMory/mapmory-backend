@@ -28,6 +28,9 @@ type TripStats struct {
 	// Public reports a live public share of the trip (design doc 4.2: trips are
 	// private until the owner shares them publicly).
 	Public bool
+	// UnderReview reports a live public share of the trip with an unresolved
+	// report, which hides that share from the public map.
+	UnderReview bool
 }
 
 // MapQuery selects the caller's located photos for the owner map (GET
@@ -154,8 +157,12 @@ func (r *PostgresRepository) TripStats(ctx context.Context, ownerID uuid.UUID, t
 	}
 
 	public, err := r.db.QueryContext(ctx, `
-		SELECT DISTINCT s.trip_id FROM shares s JOIN trips t ON t.id = s.trip_id
+		SELECT s.trip_id, bool_or(EXISTS (
+			SELECT 1 FROM share_reports sr WHERE sr.share_id = s.id AND sr.resolved_at IS NULL
+		))
+		FROM shares s JOIN trips t ON t.id = s.trip_id
 		WHERE t.owner_id = $1 AND s.trip_id = ANY($2::uuid[]) AND s.mode = 'public' AND s.revoked_at IS NULL
+		GROUP BY s.trip_id
 	`, ownerID, "{"+strings.Join(ids, ",")+"}")
 	if err != nil {
 		return nil, fmt.Errorf("trip visibility: %w", err)
@@ -163,11 +170,12 @@ func (r *PostgresRepository) TripStats(ctx context.Context, ownerID uuid.UUID, t
 	defer public.Close()
 	for public.Next() {
 		var id uuid.UUID
-		if err := public.Scan(&id); err != nil {
+		var underReview bool
+		if err := public.Scan(&id, &underReview); err != nil {
 			return nil, fmt.Errorf("trip visibility: %w", err)
 		}
 		s := stats[id]
-		s.Public = true
+		s.Public, s.UnderReview = true, underReview
 		stats[id] = s
 	}
 	if err := public.Err(); err != nil {

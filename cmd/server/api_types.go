@@ -22,6 +22,8 @@ type ownedTrip struct {
 	EndDate      *string  `json:"end_date"`
 	// Visibility is "public" while the trip has a live public share.
 	Visibility string `json:"visibility"`
+	// UnderReview is true while a public share of the trip is reported and hidden.
+	UnderReview bool `json:"under_review"`
 }
 
 type ownedTripPage struct {

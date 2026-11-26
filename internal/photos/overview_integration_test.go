@@ -208,6 +208,36 @@ func TestTripVisibilityIntegration(t *testing.T) {
 	if !stats[f.tripID].Public {
 		t.Fatal("a live public share did not make the trip public")
 	}
+	if stats[f.tripID].UnderReview {
+		t.Fatal("an unreported public share put the trip under review")
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO share_reports (id, share_id, reason)
+		SELECT gen_random_uuid(), id, 'Shows a private person' FROM shares WHERE trip_id = $1 AND mode = 'public' AND revoked_at IS NULL
+	`, f.tripID); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = repo.TripStats(ctx, f.owner, []uuid.UUID{f.tripID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stats[f.tripID].Public || !stats[f.tripID].UnderReview {
+		t.Fatalf("a reported public share: %+v; want public and under review", stats[f.tripID])
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE share_reports SET resolved_at = now()
+		WHERE share_id IN (SELECT id FROM shares WHERE trip_id = $1)
+	`, f.tripID); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = repo.TripStats(ctx, f.owner, []uuid.UUID{f.tripID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats[f.tripID].UnderReview {
+		t.Fatal("a resolved report still puts the trip under review")
+	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM shares WHERE trip_id = $1`, f.tripID); err != nil {
 		t.Fatal(err)
 	}

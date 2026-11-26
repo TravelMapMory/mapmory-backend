@@ -1188,6 +1188,7 @@ components:
       - start_date
       - end_date
       - visibility
+      - under_review
       properties:
         id:
           type: string
@@ -1237,6 +1238,10 @@ components:
           - public
           description: public while the trip has a live public share; trips are
             private until the owner shares them publicly (design doc 4.2).
+        under_review:
+          type: boolean
+          description: True while a public share of the trip has an unresolved report
+            and is therefore hidden from the public map.
       description: photo_count and the other aggregates cover processed photos (ready
         or needs-location) only.
       title: Trip

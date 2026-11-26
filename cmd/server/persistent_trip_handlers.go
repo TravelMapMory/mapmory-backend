@@ -67,6 +67,7 @@ func (h *persistentTripHandlers) tripResponses(ctx context.Context, owner uuid.U
 		if s.Public {
 			items[i].Visibility = "public"
 		}
+		items[i].UnderReview = s.UnderReview
 		if s.Cover != nil && s.Cover.DisplayObjectName != nil {
 			url, expires, err := h.sign(*s.Cover.DisplayObjectName)
 			if err != nil {
