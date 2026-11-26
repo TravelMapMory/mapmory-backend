@@ -235,7 +235,7 @@ func (r *PostgresRepository) SuggestLabels(ctx context.Context, photoID uuid.UUI
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE photos SET country = $4, city = $5, place_name = $6,
 			label_status = 'suggested', label_provider = $7, label_attribution = $8
-		WHERE id = $1 AND lat = $2 AND lng = $3 AND label_status <> 'confirmed'
+		WHERE id = $1 AND lat = $2 AND lng = $3 AND label_status = 'pending'
 	`, photoID, lat, lng, nullIfEmpty(labels.Country), nullIfEmpty(labels.City), nullIfEmpty(labels.PlaceName),
 		nullIfEmpty(labels.Provider), nullIfEmpty(labels.Attribution))
 	if err != nil {
