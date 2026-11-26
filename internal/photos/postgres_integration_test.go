@@ -376,3 +376,30 @@ func TestRelocateIntegration(t *testing.T) {
 		t.Fatalf("a stranger's request changed the photo: %+v", photo)
 	}
 }
+
+func TestClaimLabelRetriesIntegration(t *testing.T) {
+	db := openIntegrationDB(t)
+	f := newFixture(t, db)
+	repo := NewPostgresRepository(db)
+	ctx := testContext(t)
+	lat, lng := 35.0, 135.7
+	pending := f.processedPhoto(t, StateReady, &lat, &lng)
+	f.processedPhoto(t, StateNeedsLocation, nil, nil)
+	labelled := f.processedPhoto(t, StateReady, &lat, &lng)
+	if stored, err := repo.SuggestLabels(ctx, labelled, lat, lng, Labels{City: "Kyoto"}); !stored || err != nil {
+		t.Fatal("suggest labels")
+	}
+
+	for attempt := 1; attempt <= MaxLabelRetries; attempt++ {
+		claimed, err := repo.ClaimLabelRetries(ctx, f.owner, f.tripID, 5)
+		if err != nil || len(claimed) != 1 || claimed[0].ID != pending {
+			t.Fatalf("attempt %d: %+v, %v", attempt, claimed, err)
+		}
+	}
+	if claimed, _ := repo.ClaimLabelRetries(ctx, f.owner, f.tripID, 5); len(claimed) != 0 {
+		t.Fatalf("retried past the limit: %+v", claimed)
+	}
+	if claimed, _ := repo.ClaimLabelRetries(ctx, uuid.New(), f.tripID, 5); len(claimed) != 0 {
+		t.Fatal("a stranger claimed retries")
+	}
+}

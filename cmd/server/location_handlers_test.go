@@ -416,3 +416,61 @@ func TestRateLimiter(t *testing.T) {
 		t.Fatal("refill after 0.5 s must allow exactly one more")
 	}
 }
+
+func listFirstPage(env *photoTestEnv) *apiPhoto {
+	response := tripRequest(env.handler, "GET", "/api/trips/"+env.tripID.String()+"/photos", "", "Bearer valid")
+	var page photoPage
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || len(page.Items) == 0 {
+		panic(response.Body.String())
+	}
+	return &page.Items[0]
+}
+
+func TestOpeningATripRetriesPendingLabels(t *testing.T) {
+	provider := &providerFake{err: place.ErrTransient}
+	env := newLocationTestEnv(t, provider)
+	env.processed(photos.StateReady, floatPtr(34.967), floatPtr(135.773))
+
+	// The provider is still down: labels stay pending, the listing succeeds.
+	if got := listFirstPage(env); got.LabelStatus != photos.LabelPending {
+		t.Fatalf("labels = %+v", got)
+	}
+	// It recovers: the next opening labels the photo.
+	provider.mu.Lock()
+	provider.err, provider.result = nil, kyoto
+	provider.mu.Unlock()
+	if got := listFirstPage(env); got.LabelStatus != photos.LabelSuggested || got.City == nil || *got.City != "Kyoto" {
+		t.Fatalf("after recovery = %+v", got)
+	}
+	if provider.callCount() != 2 {
+		t.Fatalf("provider calls = %d", provider.callCount())
+	}
+}
+
+func TestLabelRetriesStopAfterThree(t *testing.T) {
+	provider := &providerFake{err: place.ErrNoResult}
+	env := newLocationTestEnv(t, provider)
+	env.processed(photos.StateReady, floatPtr(0.5), floatPtr(-160.5))
+	for i := 0; i < 6; i++ {
+		listFirstPage(env)
+	}
+	if provider.callCount() != photos.MaxLabelRetries {
+		t.Fatalf("provider calls = %d, want %d", provider.callCount(), photos.MaxLabelRetries)
+	}
+}
+
+func TestLabelRetriesSkipLaterPagesAndUnlocatedPhotos(t *testing.T) {
+	provider := &providerFake{result: kyoto}
+	env := newLocationTestEnv(t, provider)
+	env.processed(photos.StateNeedsLocation, nil, nil)
+	listFirstPage(env)
+	if provider.callCount() != 0 {
+		t.Fatal("a photo without a position was sent to the provider")
+	}
+	env.processed(photos.StateReady, floatPtr(1), floatPtr(2))
+	cursor := photos.Cursor{ID: uuid.New()}.Encode()
+	tripRequest(env.handler, "GET", "/api/trips/"+env.tripID.String()+"/photos?cursor="+cursor, "", "Bearer valid")
+	if provider.callCount() != 0 {
+		t.Fatal("a later page retried labels")
+	}
+}

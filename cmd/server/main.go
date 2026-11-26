@@ -323,7 +323,7 @@ func newConfiguredHandler(
 	var localStore *photostorage.Local
 	var store photostorage.Store
 	cleanup := func() { _ = db.Close() }
-	switch strings.TrimSpace(os.Getenv("MAPMORY_PHOTO_STORAGE")) {
+	switch photoStorageMode() {
 	case "local":
 		if os.Getenv("MAPMORY_PHOTO_BUCKET") != "" {
 			_ = db.Close()
@@ -431,7 +431,7 @@ func run() error {
 	defer cleanup()
 
 	addr := listenAddr()
-	if os.Getenv("MAPMORY_ENABLE_DB_USER_RESOLUTION") == "true" && os.Getenv("MAPMORY_PHOTO_STORAGE") == "local" {
+	if os.Getenv("MAPMORY_ENABLE_DB_USER_RESOLUTION") == "true" && photoStorageMode() == "local" {
 		addr = "127.0.0.1" + addr // Never expose local object storage externally.
 	}
 	log.Printf("listening on %s", addr)
@@ -449,4 +449,11 @@ func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// photoStorageMode is MAPMORY_PHOTO_STORAGE trimmed. Selecting the store and
+// deciding whether to bind to loopback must read the same value, or a value
+// such as "local " would enable local storage on every interface.
+func photoStorageMode() string {
+	return strings.TrimSpace(os.Getenv("MAPMORY_PHOTO_STORAGE"))
 }

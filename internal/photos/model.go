@@ -174,4 +174,11 @@ type Repository interface {
 	// ConfirmLabels accepts the caller's suggested labels. It returns
 	// ErrNotFound or ErrNoSuggestion.
 	ConfirmLabels(ctx context.Context, ownerID, photoID uuid.UUID) (Photo, error)
+	// ClaimLabelRetries returns up to limit of the caller's processed, located
+	// photos in tripID whose labels are still pending after fewer than
+	// MaxLabelRetries retries, and counts one retry for each (design doc 7.3).
+	ClaimLabelRetries(ctx context.Context, ownerID, tripID uuid.UUID, limit int) ([]Photo, error)
 }
+
+// MaxLabelRetries is how often pending labels are retried after upload.
+const MaxLabelRetries = 3

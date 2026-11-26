@@ -315,6 +315,11 @@ func (h *uploadHandlers) listTripPhotos(w http.ResponseWriter, r *http.Request) 
 		after = &cursor
 	}
 
+	// Pending labels are retried when the owner opens the trip (first page).
+	if after == nil {
+		h.retryPendingLabels(r.Context(), owner, tripID)
+	}
+
 	// One extra row tells whether another page exists.
 	records, err := h.photos.ListByTrip(r.Context(), owner, tripID, after, limit+1)
 	if errors.Is(err, photos.ErrNotFound) {

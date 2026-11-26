@@ -235,7 +235,7 @@ func (r *PostgresRepository) SuggestLabels(ctx context.Context, photoID uuid.UUI
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE photos SET country = $4, city = $5, place_name = $6,
 			label_status = 'suggested', label_provider = $7, label_attribution = $8
-		WHERE id = $1 AND lat = $2 AND lng = $3 AND label_status <> 'confirmed'
+		WHERE id = $1 AND lat = $2 AND lng = $3 AND label_status = 'pending'
 	`, photoID, lat, lng, nullIfEmpty(labels.Country), nullIfEmpty(labels.City), nullIfEmpty(labels.PlaceName),
 		nullIfEmpty(labels.Provider), nullIfEmpty(labels.Attribution))
 	if err != nil {
@@ -296,4 +296,24 @@ func (r *PostgresRepository) explainMiss(ctx context.Context, ownerID, photoID u
 		return err
 	}
 	return conflict
+}
+
+func (r *PostgresRepository) ClaimLabelRetries(ctx context.Context, ownerID, tripID uuid.UUID, limit int) ([]Photo, error) {
+	// SKIP LOCKED lets two simultaneous listings retry different photos.
+	photos, err := r.queryPhotos(ctx, `
+		UPDATE photos p SET label_attempts = p.label_attempts + 1
+		WHERE p.id IN (
+			SELECT q.id FROM photos q JOIN trips t ON t.id = q.trip_id
+			WHERE q.trip_id = $1 AND t.owner_id = $2 AND q.state IN ('ready', 'needs-location')
+			  AND q.lat IS NOT NULL AND q.label_status = 'pending' AND q.label_attempts < $3
+			ORDER BY q.id
+			LIMIT $4
+			FOR UPDATE OF q SKIP LOCKED
+		)
+		RETURNING `+photoColumns,
+		tripID, ownerID, MaxLabelRetries, limit)
+	if err != nil {
+		return nil, fmt.Errorf("claim label retries: %w", err)
+	}
+	return photos, nil
 }
