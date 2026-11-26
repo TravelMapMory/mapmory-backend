@@ -492,3 +492,53 @@ func TestLabelRetriesSkipLaterPagesAndUnlocatedPhotos(t *testing.T) {
 		t.Fatal("a later page retried labels")
 	}
 }
+
+// Search-selected labels take precedence over a reverse-geocoder's nearby venue.
+func TestUpdatePhotoLocationPreservesSelectedPlace(t *testing.T) {
+	provider := &providerFake{result: place.ResolvedPlace{
+		Country: "Finland", City: "Espoo", Name: "Another nearby venue", Provider: "geoapify",
+	}}
+	env := newLocationTestEnv(t, provider)
+	photo := env.processed(photos.StateNeedsLocation, nil, nil)
+	body := `{"lat":60.184,"lng":24.828,"selected_place":{"name":"Täffä","kind":"amenity","city":"","country":""}}`
+	got, response := env.patchLocation(photo.ID, body, "Bearer valid")
+	if got == nil {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got.PlaceName == nil || *got.PlaceName != "Täffä" || got.City == nil || *got.City != "Espoo" || got.LabelStatus != photos.LabelConfirmed {
+		t.Fatalf("selected place not retained: %+v", got)
+	}
+	if provider.callCount() != 1 {
+		t.Fatalf("expected reverse lookup for missing administrative labels, calls=%d", provider.callCount())
+	}
+	stored := env.repo.get(photo.ID)
+	if stored.PlaceName == nil || *stored.PlaceName != "Täffä" {
+		t.Fatalf("selected place was not persisted: %+v", stored)
+	}
+}
+
+func TestUpdatePhotoLocationSelectedCityAndProviderFailure(t *testing.T) {
+	env := newLocationTestEnv(t, &providerFake{err: place.ErrTransient})
+	photo := env.processed(photos.StateNeedsLocation, nil, nil)
+	body := `{"lat":60.2,"lng":24.66,"selected_place":{"name":"Espoo","kind":"city","city":"Espoo","country":"Finland"}}`
+	got, response := env.patchLocation(photo.ID, body, "Bearer valid")
+	if got == nil || got.City == nil || *got.City != "Espoo" || got.Country == nil || *got.Country != "Finland" || got.PlaceName != nil || got.LabelStatus != photos.LabelConfirmed {
+		t.Fatalf("status=%d body=%s photo=%+v", response.Code, response.Body.String(), got)
+	}
+}
+
+func TestUpdatePhotoLocationRejectsInvalidSelectedPlace(t *testing.T) {
+	env := newLocationTestEnv(t, &providerFake{result: kyoto})
+	photo := env.processed(photos.StateNeedsLocation, nil, nil)
+	for _, body := range []string{
+		`{"lat":1,"lng":2,"selected_place":{"name":"","kind":"amenity"}}`,
+		`{"lat":1,"lng":2,"selected_place":{"name":"Fake","kind":"bogus"}}`,
+		`{"selected_place":{"name":"Fake","kind":"amenity"}}`,
+		`{"confirm_label":true,"selected_place":{"name":"Fake","kind":"amenity"}}`,
+		`{"lat":1,"lng":2,"selected_place":{"name":"Fake","kind":"amenity","extra":1}}`,
+	} {
+		if _, response := env.patchLocation(photo.ID, body, "Bearer valid"); response.Code != http.StatusBadRequest {
+			t.Errorf("%q: status=%d body=%s", body, response.Code, response.Body.String())
+		}
+	}
+}
