@@ -256,6 +256,11 @@ func (h *placeSearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	candidates, err := h.searcher.Search(ctx, query, placeSearchLimit)
 	if err != nil {
+		// A new keystroke aborts the previous browser request. This is not
+		// a provider outage and there is no client left to receive an error.
+		if errors.Is(r.Context().Err(), context.Canceled) {
+			return
+		}
 		// Never report a provider failure as "no results" (frontend #29).
 		log.Printf("place search: %v", err)
 		writeError(w, http.StatusServiceUnavailable, "places_unavailable", "place search is temporarily unavailable")
@@ -263,10 +268,18 @@ func (h *placeSearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	response := placeSearchResponse{Items: make([]apiPlace, 0, len(candidates))}
 	for _, c := range candidates {
-		item := apiPlace{ID: c.ID, Name: c.Name, Label: c.Label, Kind: c.Kind, Lat: c.Lat, Lng: c.Lng, Country: c.Country, Zoom: 5}
-		if c.Kind == place.KindCity {
-			item.Zoom, item.City = 11, nullable(c.City)
+		zoom := 5
+		switch c.Kind {
+		case place.KindCity:
+			zoom = 11
+		case place.KindLocality:
+			zoom = 14
+		case place.KindStreet:
+			zoom = 16
+		case place.KindAmenity:
+			zoom = 17
 		}
+		item := apiPlace{ID: c.ID, Name: c.Name, Label: c.Label, Kind: c.Kind, Lat: c.Lat, Lng: c.Lng, Country: c.Country, City: nullable(c.City), Zoom: zoom}
 		response.Items = append(response.Items, item)
 	}
 	writeJSON(w, http.StatusOK, response)

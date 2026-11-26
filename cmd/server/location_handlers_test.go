@@ -358,6 +358,9 @@ func TestPlaceSearch(t *testing.T) {
 	searcher := &searcherFake{candidates: []place.Candidate{
 		{ID: "c1", Name: "Kyoto", Label: "Kyoto, Japan", Kind: place.KindCity, Lat: 35.01, Lng: 135.77, City: "Kyoto", Country: "Japan"},
 		{ID: "c2", Name: "Japan", Label: "Japan", Kind: place.KindCountry, Lat: 36.5, Lng: 139, Country: "Japan"},
+		{ID: "l1", Name: "Otaniemi", Label: "Otaniemi, Espoo, Finland", Kind: place.KindLocality, Lat: 60.18, Lng: 24.83, City: "Espoo", Country: "Finland"},
+		{ID: "s1", Name: "Rautatientori", Label: "Rautatientori, Helsinki, Finland", Kind: place.KindStreet, Lat: 60.17, Lng: 24.94, City: "Helsinki", Country: "Finland"},
+		{ID: "a1", Name: "Taproom d20", Label: "Taproom d20, Helsinki, Finland", Kind: place.KindAmenity, Lat: 60.17, Lng: 24.94, City: "Helsinki", Country: "Finland"},
 	}}
 	handler := withPlaceSearch(http.NotFoundHandler(), searcher)
 
@@ -372,8 +375,10 @@ func TestPlaceSearch(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Items) != 2 || got.Items[0].Zoom != 11 || got.Items[0].City == nil || *got.Items[0].City != "Kyoto" ||
-		got.Items[1].Zoom != 5 || got.Items[1].City != nil || got.Items[1].Kind != "country" {
+	if len(got.Items) != 5 || got.Items[0].Zoom != 11 || got.Items[0].City == nil || *got.Items[0].City != "Kyoto" ||
+		got.Items[1].Zoom != 5 || got.Items[1].City != nil || got.Items[1].Kind != "country" ||
+		got.Items[2].Zoom != 14 || got.Items[2].City == nil || *got.Items[2].City != "Espoo" ||
+		got.Items[3].Zoom != 16 || got.Items[4].Zoom != 17 {
 		t.Fatalf("items = %+v", got.Items)
 	}
 	// No public route requires a token, and other paths fall through.
@@ -398,6 +403,19 @@ func TestPlaceSearchEmptyAndUnavailable(t *testing.T) {
 	unconfigured := placeSearch(withPlaceSearch(http.NotFoundHandler(), nil), "Kyoto")
 	if unconfigured.Code != http.StatusServiceUnavailable {
 		t.Fatalf("no key: status=%d", unconfigured.Code)
+	}
+}
+
+// An aborted browser query is expected when the user continues typing.
+// The handler must not attempt to write a 503 after the client has gone away.
+func TestPlaceSearchClientCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest(http.MethodGet, "/api/places/search?q=Otaniemi", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	withPlaceSearch(http.NotFoundHandler(), &searcherFake{err: context.Canceled}).ServeHTTP(w, r)
+	if w.Body.Len() != 0 {
+		t.Fatalf("canceled request wrote a response: %s", w.Body.String())
 	}
 }
 
