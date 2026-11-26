@@ -119,13 +119,16 @@ func (r *PostgresRepository) Create(ctx context.Context, ownerID uuid.UUID, inpu
 	return share, nil
 }
 
+// ListByTrip returns the owner's live shares of a trip, newest first, marking
+// those hidden by an unresolved report so the owner can see why.
 func (r *PostgresRepository) ListByTrip(ctx context.Context, ownerID, tripID uuid.UUID) ([]Share, error) {
 	if err := r.ownsTrip(ctx, r.db, ownerID, tripID); err != nil {
 		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT s.id, s.trip_id, s.mode, s.title, s.description, s.token, s.created_at, s.revoked_at,
-			COALESCE(string_agg(sp.photo_id::text, ',' ORDER BY sp.photo_id), '')
+			COALESCE(string_agg(sp.photo_id::text, ',' ORDER BY sp.photo_id), ''),
+			NOT `+notUnderReview("s.id")+`
 		FROM shares s LEFT JOIN share_photos sp ON sp.share_id = s.id
 		WHERE s.trip_id = $1 AND s.revoked_at IS NULL
 		GROUP BY s.id
@@ -139,7 +142,7 @@ func (r *PostgresRepository) ListByTrip(ctx context.Context, ownerID, tripID uui
 	for rows.Next() {
 		var s Share
 		var ids string
-		if err := rows.Scan(&s.ID, &s.TripID, &s.Mode, &s.Title, &s.Description, &s.Token, &s.CreatedAt, &s.RevokedAt, &ids); err != nil {
+		if err := rows.Scan(&s.ID, &s.TripID, &s.Mode, &s.Title, &s.Description, &s.Token, &s.CreatedAt, &s.RevokedAt, &ids, &s.UnderReview); err != nil {
 			return nil, fmt.Errorf("list shares: %w", err)
 		}
 		s.PhotoIDs, err = parseUUIDList(ids)

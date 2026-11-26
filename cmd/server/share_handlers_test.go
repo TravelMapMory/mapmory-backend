@@ -213,9 +213,10 @@ func TestOwnerShareRoutesNeedAuth(t *testing.T) {
 		}
 	}
 	shareID := uuid.New()
-	repo.list = []shares.Share{{ID: shareID, TripID: env.tripID, Mode: shares.ModeLink, Title: "x", Token: "tok", PhotoIDs: []uuid.UUID{}}}
+	repo.list = []shares.Share{{ID: shareID, TripID: env.tripID, Mode: shares.ModePublic, Title: "x", Token: "tok", PhotoIDs: []uuid.UUID{}, UnderReview: true}}
 	if response := tripRequest(env.handler, "GET", tripPath, "", "Bearer valid"); response.Code != http.StatusOK ||
-		!strings.Contains(response.Body.String(), shareID.String()) {
+		!strings.Contains(response.Body.String(), shareID.String()) ||
+		!strings.Contains(response.Body.String(), `"under_review":true`) {
 		t.Fatalf("list: status=%d body=%s", response.Code, response.Body.String())
 	}
 	if response := tripRequest(env.handler, "DELETE", "/api/shares/"+shareID.String(), "", "Bearer valid"); response.Code != http.StatusNoContent ||

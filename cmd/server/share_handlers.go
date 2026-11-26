@@ -63,6 +63,7 @@ type apiShare struct {
 	Token       string     `json:"token"`
 	CreatedAt   time.Time  `json:"created_at"`
 	RevokedAt   *time.Time `json:"revoked_at"`
+	UnderReview bool       `json:"under_review"`
 }
 
 type shareList struct {
@@ -110,13 +111,15 @@ type apiPublicMap struct {
 	Truncated bool               `json:"truncated"`
 }
 
+// shareResponse is the owner's JSON view of a share.
 func shareResponse(s shares.Share) apiShare {
 	ids := make([]string, len(s.PhotoIDs))
 	for i, id := range s.PhotoIDs {
 		ids[i] = id.String()
 	}
 	return apiShare{ID: s.ID.String(), TripID: s.TripID.String(), Mode: s.Mode, Title: s.Title,
-		Description: s.Description, PhotoIDs: ids, Token: s.Token, CreatedAt: s.CreatedAt, RevokedAt: s.RevokedAt}
+		Description: s.Description, PhotoIDs: ids, Token: s.Token, CreatedAt: s.CreatedAt, RevokedAt: s.RevokedAt,
+		UnderReview: s.UnderReview}
 }
 
 // createShareInput is the validated POST /api/trips/{trip_id}/shares body.

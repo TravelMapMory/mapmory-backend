@@ -237,9 +237,10 @@ func TestOverviewRoutesRequireAuthAndHideErrors(t *testing.T) {
 func TestTripVisibilityFollowsPublicShares(t *testing.T) {
 	overview := &overviewFake{}
 	env, record := newOverviewTestEnv(t, overview)
-	overview.stats = map[uuid.UUID]photos.TripStats{record.ID: {Public: true}}
+	overview.stats = map[uuid.UUID]photos.TripStats{record.ID: {Public: true, UnderReview: true}}
 	response := tripRequest(env.handler, "GET", "/api/trips/"+record.ID.String(), "", "Bearer valid")
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"visibility":"public"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"visibility":"public"`) ||
+		!strings.Contains(response.Body.String(), `"under_review":true`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
