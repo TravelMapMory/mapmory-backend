@@ -60,14 +60,20 @@ exist only in database mode.
 
 ### Database mode
 
-`update.sh` also reads the Secret Manager secret `mapmory-database-url` every
-minute. When `mapmory-vm` can read it, the API gets
-`MAPMORY_ENABLE_DB_USER_RESOLUTION=true` and that `DATABASE_URL`, through a
-root-only env file on tmpfs (`/run/mapmory/api.env`), never the command line.
-When the secret is missing or not readable (`404`/`403`), the API runs the public
-in-memory prototype, which is the state today. A failed fetch (timeout, `5xx`)
-keeps the current mode, so an outage never drops the API back to the prototype.
-The API container is recreated within a minute whenever that file changes.
+`update.sh` also reads two Secret Manager secrets every minute and passes them to
+the API through a root-only env file on tmpfs (`/run/mapmory/api.env`), never the
+command line:
+
+| Secret | When `mapmory-vm` can read it, the API gets |
+|---|---|
+| `mapmory-database-url` | `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` and that `DATABASE_URL` |
+| `mapmory-geoapify-api-key` | `GEOAPIFY_API_KEY` (suggested place labels and place search; optional) |
+
+A secret that is missing or not readable (`404`/`403`) leaves its settings out;
+without the database URL the API runs the public in-memory prototype. A failed
+fetch (timeout, `5xx`) keeps the current file, so an outage never drops the API
+back to the prototype or turns place search off. The API container is recreated
+within a minute whenever that file changes.
 
 Turning it on, in this order ([#53](https://github.com/TravelMapMory/mapmory-backend/issues/53)):
 
@@ -87,8 +93,9 @@ Turning it on, in this order ([#53](https://github.com/TravelMapMory/mapmory-bac
      --project mapmory-2026 --data-file -
    ```
 
-   Done on 22 November 2026: the secret exists with no versions, `mapmory-vm` can read
-   it, and Ki Chun has `roles/secretmanager.secretVersionAdder` on it to add the URL.
+   Done: the secret was created on 22 November 2026 and Ki Chun added the Supabase
+   session pooler URL as version 1 after migrating through `00007_create_shares.sql`.
+   The Geoapify key is stored the same way under `mapmory-geoapify-api-key`.
 
    The VM's access scopes must include `cloud-platform` (checked: they do).
 
@@ -102,7 +109,7 @@ Turning it on, in this order ([#53](https://github.com/TravelMapMory/mapmory-bac
 To go back to the prototype, unset the frontend variables and redeploy it first,
 then remove the VM's access to the secret.
 
-The Goose schema must include migration `00007_create_shares.sql` before the API runs in this mode. `GEOAPIFY_API_KEY` is optional (suggested place labels and place search) and stays server-side.
+The Goose schema must include migration `00007_create_shares.sql` before the API runs in this mode.
 
 After turning it on, verify with two Firebase test accounts: owner isolation, a real upload and display image, share creation, anonymous recipient access, and revocation. Newly revoked shares reject subsequent API lookups, but already issued signed GCS URLs can remain accessible until they expire. **Never** run migration rollback on the deployed database.
 

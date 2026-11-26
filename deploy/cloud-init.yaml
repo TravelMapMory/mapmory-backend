@@ -51,34 +51,44 @@ write_files:
           && echo "started $name ($id)"
       }
 
-      # Writes the API's database settings to FILE (root-only, on tmpfs) when
-      # the VM can read the Secret Manager secret mapmory-database-url, and an
-      # empty FILE when that secret is missing or not readable. A failed fetch
-      # keeps an existing FILE, so a Secret Manager outage never drops the API
-      # back to the in-memory prototype.
-      write_database_env() {
-        local file=$1 token body code url
+      # Sets SECRET to the latest value of Secret Manager secret NAME, read with
+      # access TOKEN, and CODE to the HTTP status ("000" without a token).
+      read_secret() {
+        local token=$1 name=$2 body
+        SECRET= CODE=000
+        [ -n "$token" ] || return 0
+        body=$(mktemp)
+        CODE=$(curl -s -m 10 -o "$body" -w '%{http_code}' -H "Authorization: Bearer $token" \
+          "https://secretmanager.googleapis.com/v1/projects/mapmory-2026/secrets/$name/versions/latest:access")
+        SECRET=$(grep -o '"data" *: *"[^"]*"' "$body" | cut -d'"' -f4 | base64 -d 2>/dev/null)
+        rm -f "$body"
+      }
+
+      # Writes the API's secret settings to FILE (root-only, on tmpfs): database
+      # mode when the VM can read mapmory-database-url, place labels and search
+      # when it can read mapmory-geoapify-api-key. A missing or unreadable
+      # secret (403/404) leaves its settings out. Any other failure keeps an
+      # existing FILE, so a Secret Manager outage never drops the API back to
+      # the in-memory prototype or turns place search off.
+      write_api_env() {
+        local file=$1 token lines= complete=1
         token=$(curl -sf -m 10 -H 'Metadata-Flavor: Google' \
           http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
           | grep -o '"access_token" *: *"[^"]*"' | cut -d'"' -f4)
-        body=$(mktemp)
-        code=$(curl -s -m 10 -o "$body" -w '%{http_code}' -H "Authorization: Bearer $token" \
-          https://secretmanager.googleapis.com/v1/projects/mapmory-2026/secrets/mapmory-database-url/versions/latest:access)
-        url=$(grep -o '"data" *: *"[^"]*"' "$body" | cut -d'"' -f4 | base64 -d 2>/dev/null)
-        rm -f "$body"
-        (
-          umask 077
-          if [ -n "$token" ] && [ "$code" = 200 ] && [ -n "$url" ]; then
-            printf 'MAPMORY_ENABLE_DB_USER_RESOLUTION=true\nDATABASE_URL=%s\n' "$url" > "$file.new"
-          elif [ -n "$token" ] && { [ "$code" = 403 ] || [ "$code" = 404 ]; }; then
-            : > "$file.new"
-          elif [ ! -e "$file" ]; then
-            : > "$file.new"
-          else
-            exit 0
-          fi
-          mv "$file.new" "$file"
-        )
+        read_secret "$token" mapmory-database-url
+        if [ "$CODE" = 200 ] && [ -n "$SECRET" ]; then
+          lines+="MAPMORY_ENABLE_DB_USER_RESOLUTION=true"$'\n'"DATABASE_URL=$SECRET"$'\n'
+        elif [ "$CODE" != 403 ] && [ "$CODE" != 404 ]; then
+          complete=0
+        fi
+        read_secret "$token" mapmory-geoapify-api-key
+        if [ "$CODE" = 200 ] && [ -n "$SECRET" ]; then
+          lines+="GEOAPIFY_API_KEY=$SECRET"$'\n'
+        elif [ "$CODE" != 403 ] && [ "$CODE" != 404 ]; then
+          complete=0
+        fi
+        [ "$complete" = 1 ] || [ ! -e "$file" ] || return 0
+        ( umask 077; printf '%s' "$lines" > "$file.new" ) && mv "$file.new" "$file"
       }
 
       docker network inspect mapmory >/dev/null 2>&1 || docker network create mapmory >/dev/null
@@ -87,7 +97,7 @@ write_files:
         docker pull -q "$REG/$app:main" >/dev/null || echo "pull failed: $app"
       done
       mkdir -p /run/mapmory
-      write_database_env /run/mapmory/api.env
+      write_api_env /run/mapmory/api.env
       # The API refuses to start without its Firebase project; the ID is public, so it lives here and not in a secret store.
       ensure api "$REG/api:main" -e FIREBASE_PROJECT_ID=mapmory-development -e MAPMORY_PHOTO_BUCKET=mapmory-2026-photos \
         --env-file /run/mapmory/api.env --label "mapmory.env=$(sha256sum /run/mapmory/api.env | cut -c1-16)"
