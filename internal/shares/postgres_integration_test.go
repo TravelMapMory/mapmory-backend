@@ -309,8 +309,14 @@ func TestReportHidesPublicShareIntegration(t *testing.T) {
 	if err := repo.Report(ctx, link.ID, "x"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a link share must not be reportable: err=%v", err)
 	}
+	if underReview(t, repo, f, public.ID) {
+		t.Fatal("an unreported share is under review")
+	}
 	if err := repo.Report(ctx, public.ID, "Shows a private person"); err != nil {
 		t.Fatalf("report: %v", err)
+	}
+	if !underReview(t, repo, f, public.ID) {
+		t.Fatal("the owner's list does not mark the reported share as under review")
 	}
 	if _, err := repo.PublicByID(ctx, public.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a reported share stayed public: err=%v", err)
@@ -330,4 +336,23 @@ func TestReportHidesPublicShareIntegration(t *testing.T) {
 	if _, err := repo.PublicByID(ctx, public.ID); err != nil {
 		t.Fatalf("resolved report still hides the share: %v", err)
 	}
+	if underReview(t, repo, f, public.ID) {
+		t.Fatal("a resolved report still marks the share as under review")
+	}
+}
+
+// underReview reports whether the owner's share list marks share id as under review.
+func underReview(t *testing.T, repo *PostgresRepository, f tripFixture, id uuid.UUID) bool {
+	t.Helper()
+	list, err := repo.ListByTrip(testContext(t), f.owner, f.tripID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range list {
+		if s.ID == id {
+			return s.UnderReview
+		}
+	}
+	t.Fatalf("share %s missing from the owner's list", id)
+	return false
 }

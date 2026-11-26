@@ -41,6 +41,8 @@ type Share struct {
 	PhotoIDs    []uuid.UUID
 	CreatedAt   time.Time
 	RevokedAt   *time.Time
+	// UnderReview is set while a report on the share is unresolved.
+	UnderReview bool
 }
 
 // Candidate is a photo the owner selected, with what the coarse position

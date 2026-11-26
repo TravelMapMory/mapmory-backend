@@ -1724,6 +1724,7 @@ components:
       - token
       - created_at
       - revoked_at
+      - under_review
       properties:
         id:
           type: string
@@ -1759,6 +1760,11 @@ components:
           - string
           - 'null'
           format: date-time
+        under_review:
+          type: boolean
+          description: True while a report on this public share is unresolved. The
+            share is then hidden from the public map and its public page; its link
+            keeps working.
       title: Share
     ShareList:
       type: object
