@@ -315,7 +315,12 @@ func (h *uploadHandlers) retryPendingLabels(ctx context.Context, owner, tripID u
 	if h.places == nil {
 		return
 	}
-	candidates, err := h.photos.ClaimLabelRetries(context.WithoutCancel(ctx), owner, tripID, labelRetriesPerListing)
+
+	// Bound the database claim and provider lookups by the same deadline.
+	budget, cancel := context.WithTimeout(ctx, labelRetryBudget)
+	defer cancel()
+
+	candidates, err := h.photos.ClaimLabelRetries(budget, owner, tripID, labelRetriesPerListing)
 	if err != nil {
 		log.Printf("trip %s: claim label retries: %v", tripID, err)
 		return
@@ -323,8 +328,7 @@ func (h *uploadHandlers) retryPendingLabels(ctx context.Context, owner, tripID u
 	if len(candidates) == 0 {
 		return
 	}
-	budget, cancel := context.WithTimeout(ctx, labelRetryBudget)
-	defer cancel()
+
 	var wg sync.WaitGroup
 	for _, photo := range candidates {
 		wg.Add(1)
