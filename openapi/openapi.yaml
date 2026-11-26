@@ -504,7 +504,7 @@ paths:
   /places/search:
     get:
       operationId: searchPlaces
-      summary: Find world cities and countries by name
+      summary: Find cities, neighbourhoods, streets and named places
       description: 'Public and rate-limited across all callers (design doc 5.2). Used
         by Find a place and the location-correction dialog. No match returns items:
         []; a provider failure or a server without a geocoding key returns 503
@@ -521,7 +521,7 @@ paths:
         description: Place name; trimmed, 2 to 100 characters.
       responses:
         '200':
-          description: Matching cities and countries, best first, at most 8
+          description: Matching named places, best first, at most 8
           content:
             application/json:
               schema:
@@ -1977,6 +1977,9 @@ components:
           enum:
           - city
           - country
+          - locality
+          - street
+          - amenity
         lat:
           type: number
         lng:

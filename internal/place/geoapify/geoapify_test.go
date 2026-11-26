@@ -254,7 +254,7 @@ const kyotoSearchBody = `{"results":[
 	{"result_type":"city","place_id":"p1","city":"Kyoto","country":"Japan","lat":35.0116,"lon":135.7681},
 	{"result_type":"city","place_id":"p4","name":"Kyōtanabe","country":"Japan","lat":34.81,"lon":135.77}]}`
 
-func TestSearchKeepsCitiesAndCountries(t *testing.T) {
+func TestSearchKeepsDetailedNamedPlaces(t *testing.T) {
 	var gotQuery url.Values
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/geocode/search" {
@@ -271,18 +271,21 @@ func TestSearchKeepsCitiesAndCountries(t *testing.T) {
 	if gotQuery.Get("text") != "Kyoto" || gotQuery.Get("apiKey") != testKey || gotQuery.Get("format") != "json" {
 		t.Fatalf("query = %v", gotQuery)
 	}
-	if len(got) != 3 {
+	if len(got) != 4 {
 		t.Fatalf("candidates = %+v", got)
 	}
 	if got[0].Kind != place.KindCity || got[0].Label != "Kyoto, Japan" || got[0].Lng != 135.7681 || got[0].ID != "p1" {
 		t.Fatalf("city = %+v", got[0])
 	}
-	if got[1].Kind != place.KindCountry || got[1].Name != "Japan" || got[1].City != "" {
-		t.Fatalf("country = %+v", got[1])
+	if got[1].Kind != place.KindAmenity || got[1].Label != "Kyoto Station, Kyoto, Japan" {
+		t.Fatalf("venue = %+v", got[1])
+	}
+	if got[2].Kind != place.KindCountry || got[2].Name != "Japan" || got[2].City != "" {
+		t.Fatalf("country = %+v", got[2])
 	}
 	// A city reported only by name still counts.
-	if got[2].City != "Kyōtanabe" || got[2].Label != "Kyōtanabe, Japan" {
-		t.Fatalf("named city = %+v", got[2])
+	if got[3].City != "Kyōtanabe" || got[3].Label != "Kyōtanabe, Japan" {
+		t.Fatalf("named city = %+v", got[3])
 	}
 }
 
@@ -305,4 +308,28 @@ func TestSearchLimitEmptyAndErrors(t *testing.T) {
 	broken := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{`)) }, 0)
 	_, err := broken.Search(context.Background(), "Kyoto", 8)
 	checkErr(t, err, place.ErrPermanent)
+}
+
+func TestSearchFinnishNeighbourhoodSquareAndVenue(t *testing.T) {
+	body := `{"results":[
+		{"result_type":"suburb","place_id":"otaniemi","suburb":"Otaniemi","city":"Espoo","country":"Finland","lat":60.184,"lon":24.827},
+		{"result_type":"street","place_id":"rautatien","street":"Rautatientori","city":"Helsinki","country":"Finland","lat":60.171,"lon":24.942},
+		{"result_type":"amenity","place_id":"taproom","name":"Taproom d20","city":"Helsinki","country":"Finland","lat":60.17,"lon":24.94},
+		{"result_type":"building","place_id":"anonymous","city":"Espoo","country":"Finland","lat":60.18,"lon":24.83},
+		{"result_type":"street","place_id":"bad","street":"Invalid","lat":91,"lon":24.83},
+		{"result_type":"suburb","place_id":"otaniemi","suburb":"Otaniemi","city":"Espoo","country":"Finland","lat":60.184,"lon":24.827}
+	]}`
+	got, err := parseSearch([]byte(body), 8)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("search: %+v, %v", got, err)
+	}
+	for i, want := range []struct{ kind, label string }{
+		{place.KindLocality, "Otaniemi, Espoo, Finland"},
+		{place.KindStreet, "Rautatientori, Helsinki, Finland"},
+		{place.KindAmenity, "Taproom d20, Helsinki, Finland"},
+	} {
+		if got[i].Kind != want.kind || got[i].Label != want.label {
+			t.Errorf("candidate %d: %+v", i, got[i])
+		}
+	}
 }

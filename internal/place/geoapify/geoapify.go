@@ -64,6 +64,9 @@ type searchResult struct {
 	ResultType string  `json:"result_type"`
 	PlaceID    string  `json:"place_id"`
 	Name       string  `json:"name"`
+	Street     string  `json:"street"`
+	Suburb     string  `json:"suburb"`
+	District   string  `json:"district"`
 	City       string  `json:"city"`
 	Country    string  `json:"country"`
 	Lat        float64 `json:"lat"`
@@ -215,14 +218,14 @@ func parseReverse(body []byte) (place.ResolvedPlace, error) {
 	}, nil
 }
 
-// Search asks Geoapify's forward geocoder for places named query and keeps the
-// cities and countries, best match first. Streets, venues and regions are
-// dropped: the map moves to a city or a country, and a corrected photo is
-// labelled at city level by default (design doc 7.4).
+// Search asks Geoapify's forward geocoder for named places, preserving its
+// ranking while accepting districts, suburbs, streets and amenities as well as
+// cities and countries. A selected result supplies coordinates; photo labels
+// remain reverse-geocoded on the server.
 //
 // Errors follow ReverseGeocode's rules; no match is an empty slice.
 func (c *Client) Search(ctx context.Context, query string, limit int) ([]place.Candidate, error) {
-	// Ask for more than limit, because non-city results are filtered out.
+	// Ask for extra results so records without a usable name can be skipped.
 	body, err := c.get(ctx, *c.search, url.Values{
 		"text":  {query},
 		"limit": {strconv.Itoa(min(max(limit, 1)*3, 20))},
@@ -268,6 +271,25 @@ func parseSearch(body []byte, limit int) ([]place.Candidate, error) {
 				continue
 			}
 			c = place.Candidate{Name: name, Kind: place.KindCountry, Country: name, Label: name}
+		case "suburb", "district", "locality", "neighbourhood", "neighborhood":
+			name := firstNonEmpty(r.Name, r.Suburb, r.District)
+			if name == "" {
+				continue
+			}
+			c = namedCandidate(name, place.KindLocality, r.City, country)
+		case "street":
+			name := firstNonEmpty(r.Street, r.Name)
+			if name == "" {
+				continue
+			}
+			c = namedCandidate(name, place.KindStreet, r.City, country)
+		case "amenity", "building":
+			// Do not show an anonymous building as a named place.
+			name := strings.TrimSpace(r.Name)
+			if name == "" {
+				continue
+			}
+			c = namedCandidate(name, place.KindAmenity, r.City, country)
 		default:
 			continue
 		}
@@ -282,4 +304,27 @@ func parseSearch(body []byte, limit int) ([]place.Candidate, error) {
 		candidates = append(candidates, c)
 	}
 	return candidates, nil
+}
+
+// firstNonEmpty selects the first nonblank provider field.
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// namedCandidate preserves the parent city and country for disambiguation.
+func namedCandidate(name, kind, city, country string) place.Candidate {
+	city, country = strings.TrimSpace(city), strings.TrimSpace(country)
+	parts := []string{name}
+	if city != "" && !strings.EqualFold(name, city) {
+		parts = append(parts, city)
+	}
+	if country != "" && !strings.EqualFold(name, country) {
+		parts = append(parts, country)
+	}
+	return place.Candidate{Name: name, Label: strings.Join(parts, ", "), Kind: kind, City: city, Country: country}
 }
