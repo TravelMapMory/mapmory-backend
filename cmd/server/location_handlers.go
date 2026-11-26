@@ -107,10 +107,67 @@ func nullable(value string) *string {
 
 // locationPatch is the body of PATCH /api/photos/{photo_id}/location: either a
 // new position, or acceptance of the suggested labels.
+// selectedLocation is supplied only when the owner chose a search suggestion.
+// This is an owner-confirmed label, not a server-verified Geoapify identity.
+type selectedLocation struct {
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	City    string `json:"city"`
+	Country string `json:"country"`
+}
+
 type locationPatch struct {
-	Lat          *float64 `json:"lat"`
-	Lng          *float64 `json:"lng"`
-	ConfirmLabel *bool    `json:"confirm_label"`
+	Lat           *float64          `json:"lat"`
+	Lng           *float64          `json:"lng"`
+	ConfirmLabel  *bool             `json:"confirm_label"`
+	SelectedPlace *selectedLocation `json:"selected_place"`
+}
+
+// selectedLabels preserves the explicitly chosen search result. Reverse
+// geocoding still supplies any missing administrative fields. Treat these
+// values as owner-supplied (they are not provider-authenticated).
+func selectedLabels(selected selectedLocation, reverse *photos.Labels) *photos.Labels {
+	labels := photos.Labels{}
+	if reverse != nil {
+		labels = *reverse
+	}
+	if selected.Country != "" {
+		labels.Country = selected.Country
+	}
+	if selected.City != "" {
+		labels.City = selected.City
+	}
+	switch selected.Kind {
+	case place.KindCountry:
+		labels.Country = selected.Name
+		labels.City = ""
+		labels.PlaceName = ""
+	case place.KindCity:
+		labels.City = selected.Name
+		labels.PlaceName = ""
+	default: // locality, street and amenity are named places, not cities
+		labels.PlaceName = selected.Name
+	}
+	// The chosen name originates from an owner-controlled request. Do not
+	// present reverse-geocoder credits as verification of that name.
+	labels.Provider = ""
+	labels.Attribution = ""
+	return &labels
+}
+
+func validSelectedPlace(selected selectedLocation) bool {
+	selected.Name = strings.TrimSpace(selected.Name)
+	if selected.Name == "" || utf8.RuneCountInString(selected.Name) > 160 ||
+		utf8.RuneCountInString(selected.City) > 160 ||
+		utf8.RuneCountInString(selected.Country) > 160 {
+		return false
+	}
+	switch selected.Kind {
+	case place.KindCountry, place.KindCity, place.KindLocality, place.KindStreet, place.KindAmenity:
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeLocationPatch(body io.Reader) (locationPatch, string) {
@@ -125,7 +182,7 @@ func decodeLocationPatch(body io.Reader) (locationPatch, string) {
 		return locationPatch{}, "invalid request body"
 	}
 	switch {
-	case patch.ConfirmLabel != nil && (patch.Lat != nil || patch.Lng != nil):
+	case patch.ConfirmLabel != nil && (patch.Lat != nil || patch.Lng != nil || patch.SelectedPlace != nil):
 		return locationPatch{}, "send either lat and lng, or confirm_label"
 	case patch.ConfirmLabel != nil:
 		if !*patch.ConfirmLabel {
@@ -136,6 +193,15 @@ func decodeLocationPatch(body io.Reader) (locationPatch, string) {
 	case math.IsNaN(*patch.Lat) || *patch.Lat < -90 || *patch.Lat > 90 ||
 		math.IsNaN(*patch.Lng) || *patch.Lng < -180 || *patch.Lng > 180:
 		return locationPatch{}, "lat must be within -90..90 and lng within -180..180"
+	}
+	if patch.SelectedPlace != nil {
+		selected := patch.SelectedPlace
+		selected.Name = strings.TrimSpace(selected.Name)
+		selected.City = strings.TrimSpace(selected.City)
+		selected.Country = strings.TrimSpace(selected.Country)
+		if !validSelectedPlace(*selected) {
+			return locationPatch{}, "invalid selected_place"
+		}
 	}
 	return patch, ""
 }
@@ -178,7 +244,14 @@ func (h *uploadHandlers) updatePhotoLocation(w http.ResponseWriter, r *http.Requ
 			h.writeLocationError(w, photos.ErrNotProcessed)
 			return
 		}
-		labels := h.lookupLabels(ctx, photoID, *patch.Lat, *patch.Lng)
+		var labels *photos.Labels
+		if patch.SelectedPlace == nil || patch.SelectedPlace.Country == "" ||
+			(patch.SelectedPlace.Kind != place.KindCountry && patch.SelectedPlace.City == "") {
+			labels = h.lookupLabels(ctx, photoID, *patch.Lat, *patch.Lng)
+		}
+		if patch.SelectedPlace != nil {
+			labels = selectedLabels(*patch.SelectedPlace, labels)
+		}
 		writeCtx, cancel := context.WithTimeout(
 			context.WithoutCancel(ctx),
 			locationWriteTimeout,

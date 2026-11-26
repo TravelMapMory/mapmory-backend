@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MapMory — minimal private-flow draft
-  version: 0.0.10
+  version: 0.0.11
   description: |-
     PROPOSED, pending team review. Version 0.0.9 documents the
     implemented private trip, photo and sharing APIs, including
@@ -464,6 +464,10 @@ paths:
         which becomes ready; exif_lat/exif_lng and the capture time never change.
         Labels for the new position are resolved and stored as confirmed; if the
         provider is unavailable the position is still saved and labels stay pending.
+        Optional selected_place records the owner's explicit selection from place
+        search, preserving its name and administrative labels even when reverse
+        geocoding returns a nearby venue. Such fields are owner-supplied, not
+        independently provider-verified. Coordinate-only updates are unchanged.
         With confirm_label: true, suggested labels become confirmed. A photo of
         another user returns 404. A photo still uploading or processing, or a confirm
         without suggested labels, returns 409.'
@@ -1951,6 +1955,25 @@ components:
           type: number
           minimum: -180
           maximum: 180
+        selected_place:
+          type: object
+          additionalProperties: false
+          description: Owner-selected search result, not a verified provider identity.
+          required: [name, kind]
+          properties:
+            name:
+              type: string
+              minLength: 1
+              maxLength: 160
+            kind:
+              type: string
+              enum: [country, city, locality, street, amenity]
+            city:
+              type: string
+              maxLength: 160
+            country:
+              type: string
+              maxLength: 160
       title: LocationCorrection
     ConfirmLabels:
       type: object
