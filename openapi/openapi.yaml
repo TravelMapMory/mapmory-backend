@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: MapMory — minimal private-flow draft
+  title: MapMory API
   version: 0.0.11
   description: |-
-    PROPOSED, pending team review. Version 0.0.9 documents the
+    Version 0.0.11 documents the
     implemented private trip, photo and sharing APIs, including
     authenticated owner operations, link and public shares,
     the public map, place labels and location correction.
@@ -1969,10 +1969,10 @@ components:
               type: string
               enum: [country, city, locality, street, amenity]
             city:
-              type: string
+              type: [string, "null"]
               maxLength: 160
             country:
-              type: string
+              type: [string, "null"]
               maxLength: 160
       title: LocationCorrection
     ConfirmLabels:
