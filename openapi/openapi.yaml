@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: MapMory API
-  version: 0.0.11
+  version: 0.0.12
   description: |-
-    Version 0.0.11 documents the
+    Version 0.0.12 documents the
     implemented private trip, photo and sharing APIs, including
     authenticated owner operations, link and public shares,
     the public map, place labels and location correction.
@@ -75,8 +75,24 @@ info:
       exceeded. When input is capped, counts and rankings reflect only
       the retained records, ordered by share ID and photo ID.
 
-    Cursor-based trip pagination, photo deletion and the failed-photo retry
-    route remain proposals.
+    Photo deletion (deletePhoto, backend #67):
+    - The owner can permanently delete one photo; its trip, the trip's other
+      photos and its shares stay. Shares stop including the photo at once;
+      trip covers, counts, review counts and map results are computed from
+      the remaining photos.
+    - The original and display images are removed from storage before the
+      photo record, so 204 means both are gone. If storage fails, the photo
+      is kept and 503 storage_unavailable is returned; repeating the request
+      completes the deletion.
+    - A photo whose upload URL is still valid (registered less than 20
+      minutes ago and not processed) or that another request is processing
+      returns 409 photo_busy, because its file could otherwise be written
+      after the deletion. Processing stuck for 10 minutes no longer blocks it.
+    - Display URLs signed before the deletion may keep working until they
+      expire, like after a trip deletion or a share revocation.
+
+    Cursor-based trip pagination and the failed-photo retry route remain
+    proposals.
 
     Open questions:
     - How should batch registration recover from a lost response: an
@@ -349,6 +365,49 @@ paths:
           $ref: '#/components/responses/500'
         '503':
           $ref: '#/components/responses/503'
+      tags:
+      - Photos
+    delete:
+      operationId: deletePhoto
+      summary: Permanently delete one photo
+      description: 'Owner only (backend #67). Removes the photo''s original and
+        display image from storage, then its record; the trip and its other photos
+        and shares stay, and shares stop including the photo. A photo of another
+        user returns 404, exactly like a photo that does not exist, including one
+        already deleted. A photo still uploading (its upload URL may be in use) or
+        being processed returns 409 photo_busy; try again in a few minutes. A
+        storage failure returns 503 storage_unavailable and keeps the photo, so the
+        request can simply be repeated. Display URLs issued earlier stay valid
+        until they expire.'
+      responses:
+        '204':
+          description: Deleted, with its stored images
+        '401':
+          $ref: '#/components/responses/401'
+        '404':
+          $ref: '#/components/responses/404'
+        '409':
+          description: 'The photo may still receive its upload or is being processed;
+            error.code: photo_busy.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: photo_busy
+                  message: the photo is still uploading or processing; try again in
+                    a few minutes
+        '500':
+          $ref: '#/components/responses/500'
+        '503':
+          description: 'Temporary failure; nothing was deleted and the request can
+            be repeated. error.code: storage_unavailable (the images could not be
+            removed), auth_unavailable or user_resolution_unavailable.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
       - Photos
   /map/photos:

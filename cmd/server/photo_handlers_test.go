@@ -26,6 +26,8 @@ type photoRepositoryFake struct {
 	tripID    uuid.UUID
 	photos    map[uuid.UUID]*photos.Photo
 	finishErr error
+	// beforeFinish runs at the start of Finish, as a concurrent request would.
+	beforeFinish func()
 
 	onRelocate func(context.Context)
 	attempts   map[uuid.UUID]int
@@ -116,6 +118,9 @@ func (f *photoRepositoryFake) Fail(_ context.Context, id uuid.UUID, uploadedAt t
 }
 
 func (f *photoRepositoryFake) Finish(_ context.Context, id uuid.UUID, result photos.Processed) (photos.Photo, error) {
+	if f.beforeFinish != nil {
+		f.beforeFinish()
+	}
 	if f.finishErr != nil {
 		return photos.Photo{}, f.finishErr
 	}
@@ -613,3 +618,37 @@ func TestGetPhoto(t *testing.T) {
 }
 
 var _ trips.Repository = tripRepositoryFake{}
+
+func TestCompleteUploadOfAPhotoDeletedMeanwhileRemovesItsDisplayImage(t *testing.T) {
+	env := newPhotoTestEnv(t)
+	photo := env.registerUploaded("a", readFixture(t, "gps.jpg"))
+	env.repo.beforeFinish = func() {
+		env.repo.mu.Lock()
+		delete(env.repo.photos, photo.ID)
+		env.repo.mu.Unlock()
+	}
+	env.repo.finishErr = photos.ErrNotFound
+
+	_, status, body := env.complete("a")
+	if status != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if _, ok := env.store.objects[uploads.DisplayObjectName(env.tripID, photo.ID)]; ok {
+		t.Fatal("the display image of a deleted photo was left in storage")
+	}
+}
+
+func TestCompleteUploadKeepsTheDisplayImageOfAPhotoFinishedElsewhere(t *testing.T) {
+	env := newPhotoTestEnv(t)
+	photo := env.registerUploaded("a", readFixture(t, "gps.jpg"))
+	// Another request reclaimed and finished the photo: it still exists.
+	env.repo.finishErr = photos.ErrNotFound
+
+	_, status, _ := env.complete("a")
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status=%d", status)
+	}
+	if _, ok := env.store.objects[uploads.DisplayObjectName(env.tripID, photo.ID)]; !ok {
+		t.Fatal("removed the display image of a photo that still exists")
+	}
+}

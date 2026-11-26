@@ -142,8 +142,21 @@ func (h *uploadHandlers) process(w http.ResponseWriter, r *http.Request, photo p
 			log.Printf("release photo %s: %v", photo.ID, err)
 		}
 	}
+	// deleted reports whether the owner deleted the photo while this request
+	// processed it (possible only once the processing counted as stale). Not
+	// found from Fail or Finish can also mean another request reclaimed and
+	// finished it; that photo still exists and must be left alone.
+	deleted := func() bool {
+		owner, _ := tripOwner(r)
+		_, err := h.photos.GetByClientFile(persist, owner, photo.BatchID, photo.ClientFileID)
+		return errors.Is(err, photos.ErrNotFound)
+	}
 	fail := func(code string) {
 		failed, err := h.photos.Fail(persist, photo.ID, info.Created, code)
+		if errors.Is(err, photos.ErrNotFound) && deleted() {
+			writeError(w, http.StatusNotFound, "not_found", "photo not found")
+			return
+		}
 		if err != nil {
 			uploadInternalError(w, "photo failure record", err)
 			return
@@ -218,6 +231,14 @@ func (h *uploadHandlers) process(w http.ResponseWriter, r *http.Request, photo p
 		result.CaptureUTCOffset = &meta.CaptureUTCOffset
 	}
 	processed, err := h.photos.Finish(persist, photo.ID, result)
+	if errors.Is(err, photos.ErrNotFound) && deleted() {
+		// The display image written above belongs to nothing: remove it.
+		if err := h.store.Delete(persist, displayName); err != nil {
+			log.Printf("photo %s: display image of a deleted photo left behind: %v", photo.ID, err)
+		}
+		writeError(w, http.StatusNotFound, "not_found", "photo not found")
+		return
+	}
 	if err != nil {
 		release()
 		uploadInternalError(w, "photo result record", err)
