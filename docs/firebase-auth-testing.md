@@ -1,9 +1,9 @@
 # Firebase Authentication — testing
 
-This guide primarily covers Firebase authentication through `GET /api/auth/me`, which does not require PostgreSQL. Database-backed identity resolution through `GET /api/users/me` is documented separately in [Application-user resolution](application-user-resolution.md). Neither endpoint currently enforces trip ownership.
+This guide primarily covers Firebase authentication through `GET /api/auth/me`, which does not require PostgreSQL. Database-backed identity resolution through `GET /api/users/me` is documented separately in [Application-user resolution](application-user-resolution.md). These diagnostic identity endpoints do not themselves grant ownership; the database-backed trip handlers independently enforce it.
 
 **Project:** `mapmory-development`  
-**Scope:** Obtaining a test Firebase ID token and checking `/api/auth/me`. See [Application-user resolution](application-user-resolution.md) for `/api/users/me`. Trips are still public prototypes.
+**Scope:** Obtaining a test Firebase ID token and checking `/api/auth/me`. See [Application-user resolution](application-user-resolution.md) for `/api/users/me`. Trip routes are private and owner-scoped when database mode is enabled, but remain public in legacy in-memory mode.
 
 ## 1. Verify the running API
 
@@ -41,7 +41,7 @@ TEST_EMAIL=your-disposable-test-user@example.com
 TEST_PASSWORD=your-disposable-test-user-password
 ```
 
-**Security:** `TEST_PASSWORD` is stored in plaintext for a disposable test account. Never commit or share `.env`. The Go backend reads only five server configuration keys from `.env`; it does not import `TEST_PASSWORD`, `TEST_EMAIL`, `FIREBASE_WEB_API_KEY` or `FIREBASE_ID_TOKEN` into its environment.
+**Security:** `TEST_PASSWORD` is stored in plaintext for a disposable test account. Never commit or share `.env`. The Go backend reads only its eight allowlisted server configuration keys from `.env`; it does not import `TEST_PASSWORD`, `TEST_EMAIL`, `FIREBASE_WEB_API_KEY` or `FIREBASE_ID_TOKEN` into its environment.
 
 ## 3. Sign in and obtain a Firebase ID token
 

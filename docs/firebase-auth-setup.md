@@ -114,7 +114,7 @@ unset GOOGLE_APPLICATION_CREDENTIALS
 go run ./cmd/server
 ```
 
-**Important:** The backend initializes the Firebase Admin SDK at startup. From the repository root, it reads `FIREBASE_PROJECT_ID` and the other four server configuration keys from an optional `.env`; explicitly exported values take precedence. `gcloud` ADC is discovered through Google’s credential chain. The trip endpoints remain unprotected.
+**Important:** The backend initializes the Firebase Admin SDK at startup. From the repository root, it reads `FIREBASE_PROJECT_ID` and its seven other allowlisted server configuration keys from an optional `.env`; explicitly exported values take precedence. `gcloud` ADC is discovered through Google’s credential chain. When `MAPMORY_ENABLE_DB_USER_RESOLUTION=true`, trip endpoints require Firebase identity and resolved application-user ownership. Legacy in-memory mode is public and must never be used for private data.
 
 The React frontend separately needs the registered **Firebase Web app configuration** (`apiKey`, `authDomain`, `projectId`, `appId`, etc.), provided by the project administrator. These identifiers are not service-account credentials. See the frontend's integration issue for wiring them into the Firebase Web SDK.
 

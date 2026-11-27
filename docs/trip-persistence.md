@@ -21,7 +21,7 @@ The server obtains `owner_id` exclusively from verified request context. The cli
 | `GET /api/trips/{trip_id}` | `200` for an owned trip; `404` for unknown, malformed, or another user's ID |
 | `PATCH /api/trips/{trip_id}` | `200` with the updated owned trip; `404` for unknown, malformed, or foreign IDs |
 
-Trip responses contain `id`, `title`, `notes`, `created_at`, `photo_count: 0` and `cover: null`. The owner UUID is not returned. Both create and update trim title and notes. Titles must be nonblank and at most 120 Unicode code points; notes are limited to 2,000 Unicode code points. Explicit JSON `null` is rejected for either field. An unknown field, extra JSON value, or invalid body returns JSON `400` (`invalid_request`). Missing/invalid Firebase credentials return JSON `401` (`unauthorized`); application-user resolution failure returns `503` (`user_resolution_unavailable`); unexpected trip-storage failures return JSON `500` (`internal_error`) without database internals. Unsupported paths/methods may return the default plain-text `404`/`405` from Go's router. `HEAD` is matched by `GET` route patterns in Go's ServeMux.
+Trip responses contain `id`, `title`, `notes`, and `created_at`; when photo storage is configured, photo counts and cover information are populated from stored photos. An empty trip has a zero count and no cover. The owner UUID is not returned. Both create and update trim title and notes. Titles must be nonblank and at most 120 Unicode code points; notes are limited to 2,000 Unicode code points. Explicit JSON `null` is rejected for either field. An unknown field, extra JSON value, or invalid body returns JSON `400` (`invalid_request`). Missing/invalid Firebase credentials return JSON `401` (`unauthorized`); application-user resolution failure returns `503` (`user_resolution_unavailable`); unexpected trip-storage failures return JSON `500` (`internal_error`) without database internals. Unsupported paths/methods may return the default plain-text `404`/`405` from Go's router. `HEAD` is matched by `GET` route patterns in Go's ServeMux.
 
 ### Partial trip updates
 
@@ -29,15 +29,15 @@ Trip responses contain `id`, `title`, `notes`, `created_at`, `photo_count: 0` an
 
 The repository applies changes in a single owner-scoped PostgreSQL `UPDATE`, preserving the trip ID, owner, and creation timestamp. Both missing and foreign trips return `404 not_found`; the client cannot change trip ownership. The operation returns the updated trip using the same shape as GET. PATCH is supported only in the authenticated database mode, not the legacy in-memory prototype.
 
-For interactive examples, see the PATCH requests in [requests.http](../requests.http). The OpenAPI draft specifies this operation while retaining proposed status for unrelated photo and upload routes.
+For interactive examples, see the PATCH requests in [requests.http](../requests.http). The OpenAPI contract specifies this operation alongside implemented photo and upload endpoints.
 
-Creation is **not idempotent**: repeating `POST` may create another trip. Do not retry a write automatically after an uncertain network failure. Trip cover/photo counts are placeholders until the photo API is integrated. The OpenAPI draft also describes proposed trip cursor pagination and future photo/upload operations not implemented here.
+Creation is **not idempotent**: repeating `POST` may create another trip. Do not retry a write automatically after an uncertain network failure. In a configured database-backed upload mode, trip cover and photo counts are populated. Cursor pagination for the trip list remains a proposal in the API contract.
 
 ## Local development
 
 1. Follow [Firebase backend setup](firebase-auth-setup.md) and [Application-user resolution](application-user-resolution.md) to configure credentials and a persistent local PostgreSQL 17 container.
 2. Set `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` and the correct `DATABASE_URL` in your ignored `.env`. Explicit shell exports override `.env`.
-3. Install Goose v3.29.0 and apply **both** migrations: `goose -dir db/migrations postgres "$DATABASE_URL" up` (the Goose CLI does not load `.env` automatically).
+3. Install Goose v3.29.0 and apply **all current** migrations: `goose -dir db/migrations postgres "$DATABASE_URL" up` (the Goose CLI does not load `.env` automatically).
 4. Run `go run ./cmd/server`. A missing or unreachable database prevents startup in database mode; there is no silent memory fallback.
 5. Refresh a disposable account's token with `scripts/firebase-id-token.sh` and exercise authenticated requests in [requests.http](../requests.http).
 6. Create a trip, update its title or notes, restart the server, and retrieve the same ID to confirm persistence. With another test account, verify that the first user's trip is neither listed nor retrievable and that an attempted PATCH returns `404` without changing its values.
@@ -61,4 +61,4 @@ The default Go suite uses fakes and needs no database. The PostgreSQL integratio
 
 ## Deployment limitations
 
-Database mode is not automatically enabled in the deployed VM. Provisioning PostgreSQL, managing credentials and applying migrations in the target environment remain separate deployment work (backend #42). Do not set the feature flag true until that setup is ready and validated. Never use the sample local password or `sslmode=disable` across an untrusted network. Do not log Firebase tokens or connection-string credentials.
+Database mode in the deployed VM depends on the configured Secret Manager database URL; the application does not migrate at startup. Verify the deployed flag, database connectivity and migration version before enabling live frontend traffic. See the [deployment guide](../deploy/README.md). Never use the sample local password or `sslmode=disable` across an untrusted network. Do not log Firebase tokens or connection-string credentials.

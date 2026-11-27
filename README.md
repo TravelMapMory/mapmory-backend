@@ -1,94 +1,112 @@
 # MapMory backend
 
-Go HTTP API for MapMory, a photo-first travel-memory application. In PostgreSQL database mode, it supports Firebase-authenticated user and trip persistence, photo upload and processing, place resolution and correction, owner maps and summaries, and link or public photo sharing. The optional in-memory mode retains legacy public prototype trip endpoints only.
+Go HTTP API for [MapMory](https://mapmory.app), a photo-first travel-memory application. The persistent API uses PostgreSQL, Firebase Authentication, photo storage and optional Geoapify place resolution. The React client lives in the [frontend repository](https://github.com/TravelMapMory/mapmory-frontend).
 
-- [Frontend](https://github.com/TravelMapMory/mapmory-frontend)
-- [OpenAPI contract](openapi/openapi.yaml) — implemented database-mode endpoints and explicitly marked proposals
-- [Coding conventions](docs/coding-conventions.md)
+The server supports **persistent database mode** for authenticated owner workflows and a **legacy in-memory prototype** with public, non-persistent trip routes. Never use the prototype for private data.
 
-## Run locally
+## Quick start
 
-Use Go 1.26.1 or the version declared in `go.mod`. Complete [Firebase authentication setup](docs/firebase-auth-setup.md) for access to the shared `mapmory-development` project and keyless credentials.
+**Requirements:** Go 1.26.1 (`go.mod`), Firebase Admin SDK initialization, and—in persistent mode—PostgreSQL 17 and Goose. Docker is used for the documented local database workflow.
 
-From the repository root:
+For the recommended **persistent local** setup:
 
-```bash
-cp -n .env.example .env
-chmod 600 .env
-# Edit .env; FIREBASE_PROJECT_ID is prefilled for the shared development project.
-go run ./cmd/server
-```
+1. Follow [Environment and local setup](docs/environment-setup.md) to start PostgreSQL, configure Firebase (development credentials or a matching Auth emulator), and choose local photo storage.
+2. From the repository root, copy the example and protect it:
 
-The server reads its allowlisted configuration keys from the repository-root `.env`: `FIREBASE_PROJECT_ID`, `MAPMORY_ENABLE_DB_USER_RESOLUTION`, `DATABASE_URL`, `MAPMORY_PHOTO_STORAGE`, `MAPMORY_LOCAL_PHOTO_DIR`, `MAPMORY_PHOTO_BUCKET`, `MAPMORY_UPLOAD_SIGNER`, and `GEOAPIFY_API_KEY`. Explicitly exported environment variables override the file, and a missing `.env` is fine when configuration is supplied by the deployment environment. `.env` is ignored by Git. The Firebase test token helper also uses `.env`, but the backend does not import test passwords or tokens into its environment.
+   ```bash
+   cp .env.example .env
+   chmod 600 .env
+   ```
 
-By default, the server listens at `http://localhost:8080` (override with `PORT`). Without PostgreSQL enabled, `/api/auth/me` remains available but `/api/users/me` is not registered.
+3. Apply **all Goose migrations** in `db/migrations/` (currently `00001`–`00009`) as described in [Database migrations](docs/database-migrations.md). Migrations are not applied automatically when the server starts.
+4. Start the server:
 
-To enable `/api/users/me` and **authenticated persistent trips**, follow [Application-user resolution](docs/application-user-resolution.md) to start local PostgreSQL, apply migrations, and set `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` in `.env`. The server requires a working `DATABASE_URL` when this flag is enabled and exits at startup if PostgreSQL is unreachable; it never falls back to memory. It does not apply migrations; run Goose yourself ([Database migrations](docs/database-migrations.md)).
+   ```bash
+   go run ./cmd/server
+   curl -i http://127.0.0.1:8080/healthz
+   ```
 
-Photo upload, retrieval, owner overview and sharing routes require **configured photo storage** in database mode. For local development without a GCS bucket, set `MAPMORY_PHOTO_STORAGE=local`, `MAPMORY_LOCAL_PHOTO_DIR=.local-photos`, and clear `MAPMORY_PHOTO_BUCKET`; see [Local photo storage](docs/local-photo-storage.md). Production GCS mode still requires a bucket and appropriate IAM permissions. Apply migrations through `00007_create_shares.sql` before enabling sharing.
+The example `.env` targets a loopback PostgreSQL instance and local photo storage, but **does not create PostgreSQL or configure Firebase credentials**. The server requires initialized Firebase Admin SDK credentials even in prototype mode. For the complete setup, including local database commands, start with the [environment guide](docs/environment-setup.md).
 
-### PostgreSQL or in-memory?
+## Configuration
 
-| Workflow | Needs PostgreSQL? |
+The server loads an allowlist of eight settings from the repository-root `.env`. Exported process variables take precedence, including empty values. Deployment may omit `.env` and supply configuration through its environment. See [Environment and local setup](docs/environment-setup.md) for requirements by mode and secret handling.
+
+| Variable | Required for | Meaning |
+| --- | --- | --- |
+| `FIREBASE_PROJECT_ID` | All server modes | Project used to verify Firebase ID tokens; Admin credentials are configured separately |
+| `MAPMORY_ENABLE_DB_USER_RESOLUTION` | Persistent mode | Set `true` for private owner-scoped PostgreSQL routes; `false` selects public prototype |
+| `DATABASE_URL` | Persistent mode | **Secret:** PostgreSQL connection URL, with migrations applied |
+| `MAPMORY_PHOTO_STORAGE` | Photo storage selection | `local` for development-only filesystem, `gcs` for Google Cloud Storage |
+| `MAPMORY_LOCAL_PHOTO_DIR` | Local photo mode | Private directory for originals and processed images |
+| `MAPMORY_PHOTO_BUCKET` | GCS photo mode | Private Google Cloud Storage bucket; empty in local mode |
+| `MAPMORY_UPLOAD_SIGNER` | GCS, when needed | Explicit signing identity; often unset on the VM |
+| `GEOAPIFY_API_KEY` | Optional place features | **Server secret:** place search and automatic labels; uploads work without it |
+
+`PORT` (default `8080`) and `FIREBASE_AUTH_EMULATOR_HOST` are process-only variables, **not loaded from `.env`**. Google Application Default Credentials (ADC) are configured through the SDK / `gcloud` or runtime identity, not by setting the Firebase Web API key. `GOOGLE_APPLICATION_CREDENTIALS` is an optional Google SDK override, not a required MapMory variable.
+
+Test-only `.env` keys (`FIREBASE_WEB_API_KEY`, `TEST_EMAIL`, `TEST_PASSWORD`, `FIREBASE_ID_TOKEN`) are consumed by the token helper, **not** the Go server. Never commit `.env`, passwords, tokens or service-account credentials.
+
+### Development modes
+
+| Mode | Configuration | Behavior |
+| --- | --- | --- |
+| Legacy prototype | Firebase initialization; database flag `false` | Public, in-memory trips; no persistent private workflow |
+| Persistent local (recommended) | Firebase; database flag `true`; migrated PostgreSQL; `MAPMORY_PHOTO_STORAGE=local` | Private owner operations, signed local photo uploads and sharing; loopback-only |
+| Persistent GCS | Firebase; migrated PostgreSQL; `MAPMORY_PHOTO_STORAGE=gcs`; private bucket and signing permissions | Real upload/processing/sharing against GCS |
+
+Database mode **fails startup** if PostgreSQL is unavailable; it does not fall back to memory. Local photo mode replaces GCS for development, not Firebase or PostgreSQL. The frontend and backend must use the **same Firebase project** for authenticated live requests.
+
+## Architecture and features
+
+| Area | Behavior |
 | --- | --- |
-| `go run ./cmd/server` with `MAPMORY_ENABLE_DB_USER_RESOLUTION` unset or `false` | No. `/healthz` and `/api/auth/me` work; `/api/trips` is the public in-memory prototype, lost on restart; `/api/users/me` returns `404`. |
-| `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` | Yes: migrated PostgreSQL at `DATABASE_URL`. Enables `/api/users/me` and persistent, owner-scoped `/api/trips`. |
-| `go test ./...`, `go vet ./...`, `go build ./...` | No. Tests use fakes and need neither a database nor Firebase credentials. |
-| `./scripts/test-migrations.sh`, `./scripts/test-postgres-integration.sh` | Docker and Goose, but no existing database: each starts and removes its own temporary container and ignores `DATABASE_URL`. |
+| Authentication | Firebase ID-token verification, user resolution to an internal application UUID and owner-scoped authorization |
+| Trips and dashboard | Persistent trip CRUD, owner summary and map filters; legacy public prototype when database mode is disabled |
+| Photos | Signed URL registration/upload/completion, EXIF extraction, EXIF-free display JPEG generation, gallery pagination and deletion |
+| Places | Optional Geoapify resolution, search and manual location correction without rewriting EXIF/capture time |
+| Sharing | Link-only and public collections, anonymous recipient views, revocation, reporting and moderation |
+| Public map | Coarse shared-photo positions and bounded viewport clustering |
 
-Every server start still needs Application Default Credentials (see Firebase setup above), even in in-memory mode.
+The API verifies ownership server-side; clients must not supply a trusted `owner_id`. A verified email is required to **create public** collections, but not to manage private trips or link-only shares. The public in-memory prototype does not provide equivalent security or persistence guarantees.
 
-```bash
-curl -i http://localhost:8080/healthz       # 200
-curl -i http://localhost:8080/api/auth/me   # 401 without a Firebase ID token
-```
+`GET /healthz` is public. `GET /api/auth/me` verifies the Firebase token, while `/api/users/me` and owner-specific routes require database mode. Photo and share APIs also require configured photo storage. See [OpenAPI](openapi/openapi.yaml) for endpoints and separately marked proposals, [Development reference](docs/development.md) for implementation details, and [Trip persistence](docs/trip-persistence.md) for ownership semantics.
 
-For a real Firebase ID token, use [Firebase authentication testing](docs/firebase-auth-testing.md) and the examples in [requests.http](requests.http).
-
-## Implemented behavior
-
-| Capability | Current status |
-| --- | --- |
-| `GET /healthz` | Public health check |
-| `GET /api/auth/me` | Firebase ID-token verification; returns verified UID |
-| `GET /api/users/me` | Opt-in: resolves Firebase UID to PostgreSQL user UUID; creates a user if missing |
-| `GET /api/trips`, `POST /api/trips`, `GET /api/trips/{trip_id}` | Database mode: Firebase-authenticated, owner-scoped PostgreSQL trips; legacy mode: public in-memory prototype |
-| Photo metadata and display-image processing | Upload mode: extracts available EXIF metadata, normalizes photo information, generates an EXIF-free display JPEG and stores processing results. Local inspection tools are also available. |
-| Place labels on upload | Database mode with `GEOAPIFY_API_KEY`: a processed photo with GPS gets suggested country, city and place labels; without the key, or when Geoapify fails, labels stay `pending` and the photo is unaffected |
-| `POST /api/trips/{trip_id}/batches` | Database mode with configured photo storage: registers JPEG/PNG files as pending photos and returns signed `PUT` URLs (GCS or loopback local storage) |
-| `POST /api/batches/{batch_id}/files/{client_file_id}/complete` | Same mode: checks the uploaded object, extracts EXIF, stores an EXIF-free display JPEG and returns the photo |
-| `GET /api/batches/{batch_id}`, `GET /api/trips/{trip_id}/photos`, `GET /api/photos/{photo_id}` | Same mode: owner-only batch status, photo list in capture order (cursor-paginated) and single photo, with signed display-image URLs |
-| `PATCH /api/photos/{photo_id}/location` | Upload mode: owner corrects a photo's position (labels resolved and confirmed; EXIF and capture time unchanged) or confirms suggested labels |
-| `GET /api/places/search?q=` | Database mode, public and rate-limited: world cities and countries for Find a place and corrections; `503` without `GEOAPIFY_API_KEY` |
-| `GET /api/map/photos`, `GET /api/me/summary` | Upload mode: owner map markers (bbox, trip, date and text filters; at most 2,000) and Dashboard totals with recent uploads |
-| Trip aggregates | Upload mode: trip responses include photo and located counts, cities, countries, date range and a signed cover |
-| `DELETE /api/photos/{photo_id}` | Database mode: permanently delete one photo and its stored images; its trip, other photos and shares stay. `409 photo_busy` while it may still be uploading or processing, `503 storage_unavailable` if storage fails: not atomic, the record is kept but an image may already be gone; repeating the request completes it |
-| `DELETE /api/trips/{trip_id}`, `DELETE /api/me` | Database mode: delete one trip (photos, batches, shares, stored images) or all of the caller's data and their application-user record |
-| `POST /api/shares/{share_id}/report` | Anyone: report a live public share; unresolved reports hide it from public discovery. See [Manual share moderation](docs/moderation.md) for review and resolution. |
-| Link and public shares | Upload mode: owners create, list and revoke fixed selections of processed photos. `GET /api/s/{token}` is accessible to anyone holding the link (410 after revocation); public shares also appear at `GET /api/public/shares/{share_id}` and on the clustered `GET /api/public/map`. Recipients receive selected photos, signed display images and stored coarse positions (city centres or 0.01° rounding), not original EXIF coordinates. Revocation blocks subsequent lookups but does not invalidate previously issued signed URLs or necessarily stop in-flight requests. |
-
-**Security:** Enable `MAPMORY_ENABLE_DB_USER_RESOLUTION=true` to use protected, persistent trip routes. When disabled, trips are **public, shared in memory and lost on restart**; never use the prototype for private information. See [Trip persistence](docs/trip-persistence.md) for ownership and remaining limitations. The OpenAPI document also contains unimplemented proposed endpoints.
-
-## Development guides
-
-- [Local photo storage](docs/local-photo-storage.md) — upload, processing and sharing without GCS
-- [Development reference](docs/development.md) — endpoints, components, and test commands
-- [Firebase authentication setup](docs/firebase-auth-setup.md) — access and keyless ADC
-- [Firebase authentication testing](docs/firebase-auth-testing.md) — disposable account, token helper, REST Client
-- [Trip persistence](docs/trip-persistence.md) — authenticated routes, ownership and end-to-end tests
-- [Application-user resolution](docs/application-user-resolution.md) — local PostgreSQL, provisioning, and API verification
-- [Database migrations](docs/database-migrations.md) — Goose schema management and lifecycle tests
-- [Photo metadata](docs/photo-metadata.md) and [experiments](docs/photo-metadata-experiments.md)
-- [Photo processing](docs/photo-processing.md) and [place resolution](docs/place-resolution.md)
-- [Deployment](deploy/README.md)
-
-## Checks
+## Development and testing
 
 ```bash
 go test ./...
 go vet ./...
 go build ./...
-./scripts/test-postgres-integration.sh  # Docker + Goose required
+./scripts/test-postgres-integration.sh  # Docker + Goose; isolated DB
+./scripts/test-migrations.sh            # Docker + Goose; migration lifecycle
 ```
 
-The ordinary Go tests do not need a running database. For Docker image construction, run `docker build -t mapmory-backend .`; runtime credentials and configuration are still required. See the deployment guide for the VM setup. Database-backed repositories, sharing and migration lifecycle have been verified locally with isolated PostgreSQL. Production end-to-end verification still requires deployed PostgreSQL configuration, GCS signing permissions and browser-level upload/sharing checks. The current VM configuration does not yet enable database mode; see the deployment guide.
+The ordinary Go tests do not require a live database or Firebase credentials; the server **does** require Firebase initialization. Integration scripts manage isolated temporary PostgreSQL instances rather than relying on your development `DATABASE_URL`. See [Firebase authentication testing](docs/firebase-auth-testing.md) and [Database migrations](docs/database-migrations.md).
+
+For local API smoke tests, use [requests.http](requests.http) and the [Firebase ID-token helper](docs/firebase-auth-testing.md). `curl -i http://127.0.0.1:8080/api/auth/me` should return `401` without a token.
+
+## Deployment
+
+The production API runs on a Google Cloud VM behind Caddy, with PostgreSQL, private GCS photo storage and Firebase Authentication. Build the image using `docker build -t mapmory-backend .`. Runtime identity, secrets, database access and GCS signing permissions must be configured independently. See [Deployment](deploy/README.md) for VM and CI behavior.
+
+Do not deploy the in-memory prototype or local filesystem photo mode publicly.
+
+## Known limitations
+
+- Geoapify place search is unavailable without `GEOAPIFY_API_KEY`; photo uploads still work, while unresolved labels remain pending.
+- Revoking a share stops subsequent collection lookups, but previously issued signed display-image URLs can remain usable until they expire.
+- The OpenAPI specification includes explicitly identified proposed endpoints that are not implemented.
+- Production end-to-end upload, sharing, GCS signing and database configuration must be checked against the actual deployed environment; a successful local test does not establish production readiness.
+
+## Documentation and credits
+
+- [Environment and local setup](docs/environment-setup.md) — required/optional variables and the persistent local workflow
+- [Database migrations](docs/database-migrations.md) and [Application-user resolution](docs/application-user-resolution.md)
+- [Firebase authentication setup](docs/firebase-auth-setup.md) and [Firebase authentication testing](docs/firebase-auth-testing.md)
+- [Local photo storage](docs/local-photo-storage.md) and [Photo processing](docs/photo-processing.md)
+- [Place resolution](docs/place-resolution.md), [Photo metadata](docs/photo-metadata.md) and [Experiments](docs/photo-metadata-experiments.md)
+- [Trip persistence](docs/trip-persistence.md), [Manual moderation](docs/moderation.md) and [Development reference](docs/development.md)
+- [Coding conventions](docs/coding-conventions.md) and [Deployment](deploy/README.md)
+
+The [frontend repository](https://github.com/TravelMapMory/mapmory-frontend) documents browser behavior and client-side setup.

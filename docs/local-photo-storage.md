@@ -7,8 +7,8 @@ Local mode is **not** a mock backend: it uses real Firebase verification, user/t
 ## Prerequisites
 
 - Go as declared in `go.mod`.
-- Docker/PostgreSQL 17 and Goose. Follow [Application-user resolution](application-user-resolution.md) to start PostgreSQL and [Database migrations](database-migrations.md) to apply migrations through `00007`.
-- Firebase development project credentials, as documented in [Firebase authentication setup](firebase-auth-setup.md). Local photo storage removes **GCS** credentials and IAM signing requirements, not Firebase authentication.
+- Docker/PostgreSQL 17 and Goose. Follow [Application-user resolution](application-user-resolution.md) to start PostgreSQL and [Database migrations](database-migrations.md) to apply all current migrations (through `00009`).
+- Firebase development project credentials, as documented in [Firebase authentication setup](firebase-auth-setup.md). Local photo storage removes **GCS** bucket and IAM signing requirements, not Firebase authentication.
 - A frontend Vite server at `http://localhost:5173` or `http://127.0.0.1:5173` (also permits the configured local preview ports 5174 and 4173).
 
 ## Backend configuration
@@ -68,4 +68,4 @@ If a photo has no location labels, the recipient map uses the coarse-coordinate 
 - Original files are not exposed by signed GET URLs; only processed `display/` objects can receive those URLs. Uploaded originals can only be read by the backend through its store interface.
 - PUT URLs are time-limited (15 minutes) and bound to an object, content type and exact byte length. Display URLs expire after one hour. Tokens are HMAC-authenticated with an ephemeral server key.
 - The filesystem is not a GCS emulator, does not provide cloud durability, and is not suitable for multi-instance deployment. Data is retained locally until removed manually. Deleting a database record does **not** automatically remove all local files; this is development data only.
-- GCS mode remains the default when `MAPMORY_PHOTO_STORAGE` is unset or `gcs` and a bucket is configured; the change does not alter deployed storage behavior.
+- GCS mode remains the default when `MAPMORY_PHOTO_STORAGE` is unset or `gcs` and a bucket is configured; this mode does not alter deployed GCS storage behavior.
