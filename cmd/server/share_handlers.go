@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/TravelMapMory/mapmory-backend/internal/auth"
 	"github.com/TravelMapMory/mapmory-backend/internal/place"
 	"github.com/TravelMapMory/mapmory-backend/internal/shares"
 	"github.com/google/uuid"
@@ -234,6 +235,15 @@ func (h *shareHandlers) create(w http.ResponseWriter, r *http.Request) {
 	if message != "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", message)
 		return
+	}
+	// Public discovery is a higher-trust operation than private link sharing.
+	// Trust only the claim from the Firebase-verified ID token, never client input.
+	if input.mode == shares.ModePublic {
+		identity, ok := auth.IdentityFromContext(r.Context())
+		if !ok || !identity.EmailVerified {
+			writeError(w, http.StatusForbidden, "email_not_verified", "verify your email address before publishing publicly")
+			return
+		}
 	}
 	ctx := r.Context()
 	candidates, err := h.repo.Candidates(ctx, owner, tripID, input.photoIDs)

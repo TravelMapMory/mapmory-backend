@@ -55,7 +55,7 @@ func RequireIdentity(
 		// Only use identity returned by the verifier.
 		ctx := WithIdentity(
 			r.Context(),
-			Identity{UID: token.UID},
+			Identity{UID: token.UID, EmailVerified: token.Claims["email_verified"] == true},
 		)
 
 		next.ServeHTTP(w, r.WithContext(ctx))

@@ -11,7 +11,8 @@ import (
 )
 
 type fakeVerifier struct {
-	uid string
+	uid      string
+	verified bool
 }
 
 func (f fakeVerifier) VerifyIDToken(
@@ -21,7 +22,7 @@ func (f fakeVerifier) VerifyIDToken(
 	if token != "valid-token" {
 		return nil, errors.New("invalid token")
 	}
-	return &firebaseauth.Token{UID: f.uid}, nil
+	return &firebaseauth.Token{UID: f.uid, Claims: map[string]interface{}{"email_verified": f.verified}}, nil
 }
 
 func TestRequireIdentityRejectsInvalidCredentials(t *testing.T) {
@@ -75,5 +76,24 @@ func TestRequireIdentityPassesVerifiedUID(t *testing.T) {
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+}
+
+func TestRequireIdentityPropagatesEmailVerification(t *testing.T) {
+	for _, verified := range []bool{false, true} {
+		handler := RequireIdentity(fakeVerifier{uid: "user-123", verified: verified}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			identity, ok := IdentityFromContext(r.Context())
+			if !ok || identity.EmailVerified != verified {
+				t.Errorf("identity=%+v expected verified=%v", identity, verified)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status=%d", rec.Code)
+		}
 	}
 }

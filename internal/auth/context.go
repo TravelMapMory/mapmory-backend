@@ -4,7 +4,8 @@ import "context"
 
 // Identity represents an authenticated Firebase user.
 type Identity struct {
-	UID string
+	UID           string
+	EmailVerified bool
 }
 
 type identityKey struct{}
