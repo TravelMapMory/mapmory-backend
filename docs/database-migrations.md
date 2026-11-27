@@ -43,7 +43,7 @@ The username, password, and disabled TLS setting in the local guide are strictly
 
 ## 3. Migration structure
 
-SQL migrations are stored in `db/migrations/` and currently run through version **00007**:
+SQL migrations are stored in `db/migrations/` and currently run through version **00009**:
 
 | Version | Main change |
 | --- | --- |
@@ -54,6 +54,8 @@ SQL migrations are stored in `db/migrations/` and currently run through version 
 | `00005_order_photos_by_capture_time.sql` | Capture-order and recent-upload indexes |
 | `00006_add_photo_place_labels.sql` | Country/city/place labels, provider attribution and confirmation status |
 | `00007_create_shares.sql` | Link/public shares, selected photos, stored coarse coordinates and database constraints |
+| `00008_create_share_reports.sql` | Public-share reports and unresolved-report index |
+| `00009_add_photo_label_attempts.sql` | Retry counter and bounds for automatic place labels |
 
 Migration 00007 uses composite foreign keys to ensure that a selected photo belongs to the share's trip. The share token is unique and share/photo relationships are indexed. The HTTP layer separately checks that selected photos are processed.
 
@@ -128,7 +130,7 @@ On an explicitly disposable database only:
 goose -dir db/migrations postgres "$DATABASE_URL" down
 ```
 
-`down` reverts the latest applied migration, currently `00007` on a fully migrated database. Repeating it rolls back earlier migrations; later steps can drop sharing, photo, trip and user tables and data. Never run this sequence against a shared database.
+`down` reverts the latest applied migration, currently `00009` on a fully migrated database. Repeating it rolls back earlier migrations; later steps can drop sharing, photo, trip and user tables and data. Never run this sequence against a shared database.
 
 Do not use `down`, `reset`, or `redo` as routine production recovery commands. Production schema changes require a deliberate migration and recovery plan.
 
@@ -206,13 +208,13 @@ The script:
 3. Applies the migrations.
 4. Executes `db/tests/schema_constraints.sql`.
 5. Repeats `goose up` to verify that no migrations remain pending.
-6. Rolls back migrations 00007 through 00001 in order and verifies that application tables were removed.
-7. Reapplies all seven migrations and reruns the SQL tests.
+6. Rolls back migrations 00009 through 00001 in order and verifies that application tables were removed.
+7. Reapplies all nine migrations and reruns the SQL tests.
 8. Removes the temporary container, including when a command fails.
 
 Unlike the standalone SQL test, the lifecycle script creates and manages its own database. It does not use the caller's `DATABASE_URL`, so it cannot accidentally roll back the normal local development database through that variable.
 
-The lifecycle script currently exercises all seven migrations. When adding another migration, update its rollback sequence and assertions.
+The lifecycle script currently exercises all nine migrations. When adding another migration, update its rollback sequence and assertions.
 
 ### CI
 

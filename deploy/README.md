@@ -94,7 +94,7 @@ Turning it on, in this order ([#53](https://github.com/TravelMapMory/mapmory-bac
    ```
 
    Done: the secret was created on 22 November 2026 and Ki Chun added the Supabase
-   session pooler URL as version 1 after migrating through `00007_create_shares.sql`.
+   session pooler URL as version 1 after initially migrating through `00007_create_shares.sql`; later migrations (`00008`–`00009`) must also be applied.
    The Geoapify key is stored the same way under `mapmory-geoapify-api-key`.
 
    The VM's access scopes must include `cloud-platform` (checked: they do).
@@ -109,7 +109,7 @@ Turning it on, in this order ([#53](https://github.com/TravelMapMory/mapmory-bac
 To go back to the prototype, unset the frontend variables and redeploy it first,
 then remove the VM's access to the secret.
 
-The Goose schema must include migration `00007_create_shares.sql` before the API runs in this mode.
+Apply all Goose migrations present in the checkout (currently through `00009_add_photo_label_attempts.sql`) before enabling the deployed database-backed API.
 
 After turning it on, verify with two Firebase test accounts: owner isolation, a real upload and display image, share creation, anonymous recipient access, and revocation. Newly revoked shares reject subsequent API lookups, but already issued signed GCS URLs can remain accessible until they expire. **Never** run migration rollback on the deployed database.
 
