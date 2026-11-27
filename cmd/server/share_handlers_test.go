@@ -128,10 +128,10 @@ func newShareTestEnv(t *testing.T, searcher place.Searcher) (*photoTestEnv, *sha
 	env := newPhotoTestEnv(t)
 	repo := &sharesFake{owner: env.owner, tripID: env.tripID, candidates: map[uuid.UUID]shares.Candidate{}}
 	verifier := endpointVerifierFunc(func(_ context.Context, token string) (*firebaseauth.Token, error) {
-		if token != "valid" {
+		if token != "valid" && token != "unverified" {
 			return nil, errors.New("invalid token")
 		}
-		return &firebaseauth.Token{UID: "subject-a"}, nil
+		return &firebaseauth.Token{UID: "subject-a", Claims: map[string]interface{}{"email_verified": token != "unverified"}}, nil
 	})
 	resolver := endpointResolverFunc(func(context.Context, string) (uuid.UUID, error) { return env.owner, nil })
 	uploads := newUploadHandlers(tripRepositoryFake{}, &batchRepositoryFake{}, env.repo, env.store)
@@ -460,5 +460,34 @@ func TestReportRateLimit(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("ten reports in a row were never rate-limited")
+	}
+}
+
+func TestPublicShareRequiresVerifiedEmailButLinkSharingDoesNot(t *testing.T) {
+	env, repo := newShareTestEnv(t, nil)
+	photo := uuid.New()
+	repo.candidates[photo] = shares.Candidate{ID: photo}
+	path := "/api/trips/" + env.tripID.String() + "/shares"
+	for _, tc := range []struct {
+		name, token, mode string
+		want              int
+	}{
+		{"unverified public", "unverified", "public", http.StatusForbidden},
+		{"verified public", "valid", "public", http.StatusCreated},
+		{"unverified private link", "unverified", "link", http.StatusCreated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(repo.created)
+			body := `{"mode":"` + tc.mode + `","title":"Kyoto","photo_ids":["` + photo.String() + `"]}`
+			response := tripRequest(env.handler, "POST", path, body, "Bearer "+tc.token)
+			if response.Code != tc.want {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, tc.want, response.Body.String())
+			}
+			if tc.want == http.StatusForbidden {
+				if len(repo.created) != before || !strings.Contains(response.Body.String(), `"email_not_verified"`) {
+					t.Fatalf("forbidden request created share or wrong code: %s", response.Body.String())
+				}
+			}
+		})
 	}
 }

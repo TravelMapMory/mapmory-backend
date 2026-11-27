@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: MapMory API
-  version: 0.0.12
+  version: 0.0.13
   description: |-
-    Version 0.0.12 documents the
+    Version 0.0.13 documents the
     implemented private trip, photo and sharing APIs, including
     authenticated owner operations, link and public shares,
     the public map, place labels and location correction.
@@ -63,6 +63,9 @@ info:
 
     Sharing:
     - Owners can create and revoke fixed photo selections as link or public shares.
+    - Public share creation requires email_verified=true in the validated Firebase ID token;
+      private link sharing and owner operations remain available without verification.
+      An unverified public request returns 403 email_not_verified.
     - Recipients receive selected display images and stored coarse positions,
       not original EXIF positions or private trip metadata.
     - City-centre lookups have a ten-second total budget per share creation;
@@ -536,7 +539,7 @@ paths:
         which becomes ready; exif_lat/exif_lng and the capture time never change.
         Labels for the new position are resolved and stored as confirmed; if the
         provider is unavailable the position is still saved and labels stay pending.
-        Optional selected_place records the owner's explicit selection from place
+        Optional selected_place records the owner''s explicit selection from place
         search, preserving its name and administrative labels even when reverse
         geocoding returns a nearby venue. Such fields are owner-supplied, not
         independently provider-verified. Coordinate-only updates are unchanged.
@@ -655,7 +658,8 @@ paths:
         recipient position is fixed now: its city''s centre when the city is known
         and the geocoder finds it, otherwise its position rounded to 0.01 degrees.
         Recipients never receive exact coordinates. The response carries the link
-        token, which only the owner receives.'
+        token, which only the owner receives. Public publishing requires a verified
+        Firebase email claim; unverified owners may still create link shares.'
       requestBody:
         required: true
         content:
@@ -673,6 +677,12 @@ paths:
           $ref: '#/components/responses/400'
         '401':
           $ref: '#/components/responses/401'
+        '403':
+          description: Email verification is required only for public publishing (email_not_verified).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/404'
         '500':
