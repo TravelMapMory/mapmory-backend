@@ -36,13 +36,19 @@ The server loads an allowlist of eight settings from the repository-root `.env`.
 
 Test-only `.env` keys (`FIREBASE_WEB_API_KEY`, `TEST_EMAIL`, `TEST_PASSWORD`, `FIREBASE_ID_TOKEN`) are consumed by the token helper, **not** the Go server. Never commit `.env`, passwords, tokens or service-account credentials.
 
-### Development modes
+### Development scenarios
 
-| Mode | Configuration | Behavior |
+| Scenario | When to use it | External services |
 | --- | --- | --- |
-| Legacy prototype | Firebase initialization; database flag `false` | Public, in-memory trips; no persistent private workflow |
-| Persistent local (recommended) | Firebase; database flag `true`; migrated PostgreSQL; `MAPMORY_PHOTO_STORAGE=local` | Private owner operations, signed local photo uploads and sharing; loopback-only |
-| Persistent GCS | Firebase; migrated PostgreSQL; `MAPMORY_PHOTO_STORAGE=gcs`; private bucket and signing permissions | Real upload/processing/sharing against GCS |
+| **A. Mock UI** | Frontend-only interface work | None; follow [frontend scenario A](https://github.com/TravelMapMory/mapmory-frontend/blob/main/docs/environment-setup.md#scenario-a--mock-ui-only) |
+| **B. Auth UI with mock data** | Test Firebase login screens | Local Firebase Auth emulator; follow [frontend scenario B](https://github.com/TravelMapMory/mapmory-frontend/blob/main/docs/environment-setup.md#scenario-b--firebase-auth-ui-with-mock-data) |
+| **C. Full local (recommended)** | Persistent upload → correct → share without cloud credentials | Local Auth emulator + PostgreSQL + local photo storage; optional Geoapify key |
+| **D. Real Firebase** | Check against the team development Firebase project | Development Firebase + authorized ADC + PostgreSQL + local photo storage; optional Geoapify key |
+| **E. GCS integration** | Check cloud-backed signed photo uploads | C or D plus a private development GCS bucket, bucket CORS and signing IAM |
+| **F. Tests** | Automated verification | Depends on test; see [Testing](docs/environment-setup.md#testing-by-dependency) |
+
+**Start with [the setup guide](docs/environment-setup.md)** for an [external-services and credentials checklist](docs/environment-setup.md#external-services-and-credentials-for-a-full-setup), the exact `.env` values and terminal commands for each scenario. Scenario C is the default for end-to-end local development; Geoapify is optional for uploading but needed to exercise automatic labels and place search.
+
 
 Database mode **fails startup** if PostgreSQL is unavailable; it does not fall back to memory. Local photo mode replaces GCS for development, not Firebase or PostgreSQL. The frontend and backend must use the **same Firebase project** for authenticated live requests.
 
