@@ -83,7 +83,7 @@ For local API smoke tests, use [requests.http](requests.http) and the [Firebase 
 
 ## Deployment
 
-The production API runs on a Google Cloud VM behind Caddy, with PostgreSQL, private GCS photo storage and Firebase Authentication. Build the image using `docker build -t mapmory-backend .`. Runtime identity, secrets, database access and GCS signing permissions must be configured independently. See [Deployment](deploy/README.md) for VM and CI behavior.
+The production API runs on a Google Cloud VM behind Caddy, with **Supabase-hosted PostgreSQL**, private GCS photo storage and Firebase Authentication. Supabase is a hosting provider for PostgreSQL, **not a requirement for local development**; the recommended setup uses a local PostgreSQL 17 container. Build the image using `docker build -t mapmory-backend .`. Runtime identity, secrets, database access and GCS signing permissions must be configured independently. See [Deployment](deploy/README.md) for VM and CI behavior.
 
 Do not deploy the in-memory prototype or local filesystem photo mode publicly.
 

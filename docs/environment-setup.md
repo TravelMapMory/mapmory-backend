@@ -24,11 +24,14 @@ Choose a **scenario** below before setting variables. This guide covers the Go A
 | **Firebase Authentication** | User sign-in; Go API verifies Firebase ID tokens | Run local Auth emulator; use `demo-mapmory` | Use the team's **development** Firebase project | Same as C or D | Backend `.env`: `FIREBASE_PROJECT_ID`; frontend `.env.local`: four `VITE_FIREBASE_*` Web app identifiers and, for emulator, `VITE_FIREBASE_AUTH_EMULATOR_URL`. For real Firebase, obtain Web app settings from **Firebase Console → Project settings → General → Your apps**; enable the intended sign-in method in Authentication. |
 | **Firebase Admin / Google credentials** | Initialize the Go Firebase Admin SDK for real-project verification | Emulator mode; no real user tokens | Developer must have authorized keyless ADC / service-account impersonation | Also needed for Google Cloud access/signing as appropriate | Configure with `gcloud auth application-default login --impersonate-service-account=...` as described in [Firebase setup](firebase-auth-setup.md). ADC is **not** the Firebase Web API key or a user ID token. |
 | **PostgreSQL 17** | Persistent users, trips, photos, and shares | Local Docker container + Goose migrations | Same | Local or approved managed database | Set backend `.env` `DATABASE_URL`; run migrations before the Go server. Never use a shared production DB for local experiments. |
+| **Supabase (managed PostgreSQL)** | Hosts MapMory's deployed PostgreSQL database; provides PostgreSQL rather than a separate database type | Not needed | Not needed | Optional alternative to local PostgreSQL, only with an authorized *development* database | Use a development PostgreSQL connection string as `DATABASE_URL` and apply the same Goose migrations. Do not copy the production Supabase connection string into local `.env`, or run migrations against production. |
 | **Photo storage** | Original JPEG/PNG bytes and processed display images | Local filesystem | Local filesystem | **Private GCS bucket** | Local: `MAPMORY_PHOTO_STORAGE=local`, `MAPMORY_LOCAL_PHOTO_DIR=.local-photos`, empty `MAPMORY_PHOTO_BUCKET`. GCS: `MAPMORY_PHOTO_STORAGE=gcs`, `MAPMORY_PHOTO_BUCKET=<your development bucket>`, appropriate ADC/IAM, signed-URL permissions and bucket CORS. Obtain bucket access from the team/cloud administrator or provision an authorized development bucket; setting its name does not create it. |
 | **Geoapify geocoding API** | Reverse geocoding after upload; world-place search and location correction suggestions | Optional for uploads; **needed to test place features** | Same | Same | Create/use a Geoapify account and project, obtain an API key from its dashboard, put it **only in backend `.env`** as `GEOAPIFY_API_KEY`. Without it, photos still upload but labels may stay `pending` and place search is unavailable. See [Place resolution](place-resolution.md). |
 | **Geoapify map tiles** | Optional browser basemap styles | Optional | Optional | Optional | A separate browser-exposed key goes in frontend `.env.local` as `VITE_GEOAPIFY_KEY`; it is **not** the backend `GEOAPIFY_API_KEY`. Empty uses OpenStreetMap-based fallback tiles. Restrict browser key usage by allowed origins where the provider permits. |
 
-**What to request from a teammate:** For **C**, no shared cloud credentials are necessary; create disposable emulator accounts and use local PostgreSQL/storage. To use **D**, request access to the development Firebase project, its Web app settings and the authorized ADC/impersonation identity. To use **E**, additionally request the **development** bucket name, relevant IAM/signing permissions and CORS configuration. For full geographic testing in any live scenario, obtain a **separate backend Geoapify key**. Do not copy production keys or credentials into local files.
+**Internal and external contributors.** Scenario **C** is the recommended starting point for everyone: it uses local PostgreSQL, local photo storage, and the Firebase Auth emulator without access to the team's cloud projects. Authorized team members can use **D** with `mapmory-development` and the listed impersonation identity. External contributors should instead create their **own Firebase development project**, configure the frontend Web app settings, set backend `FIREBASE_PROJECT_ID` to the same project ID, and supply their own appropriate Firebase Admin credentials/ADC. The team-specific service account below will not work without granted IAM access. Do not use production accounts or credentials.
+
+**What to request from a teammate:** For team-managed **D**, request the development Firebase Web app settings and authorized ADC/impersonation identity. For **E**, additionally request the **development** GCS bucket name, relevant IAM/signing permissions and CORS configuration. For full geographic testing in any live scenario, obtain a **separate backend Geoapify key**. A managed Supabase database is optional for local work; if testing against one, request a disposable development database URL, not production access.
 
 ### Before running scenario C, D, or E
 
@@ -155,11 +158,11 @@ This scenario exercises persistent trips, uploads, location correction, and link
 
 ## Scenario D — Full local stack with real Firebase
 
-This scenario uses the team's **real development Firebase project**, with a local development database and photo store.
+This scenario uses a **real Firebase development project** (the team's `mapmory-development` when authorized, or an external contributor's own project), with a local development database and photo store. The steps below illustrate the **team-managed** configuration; substitute your own project ID and credentials consistently if working independently.
 
 1. Complete [Shared prerequisite](#shared-prerequisite-for-c-and-d-local-postgresql).
-2. Set `FIREBASE_PROJECT_ID=mapmory-development` in backend `.env`; keep the shared PostgreSQL/local-storage configuration above.
-3. Configure Google Cloud CLI and keyless ADC as described in [Firebase authentication setup](firebase-auth-setup.md). The team setup requires appropriate service-account impersonation rights:
+2. Set `FIREBASE_PROJECT_ID=mapmory-development` in backend `.env` for team-managed Firebase, or set it to your own development Firebase project ID; keep the local PostgreSQL/storage configuration above.
+3. Configure Google Cloud CLI and keyless ADC as described in [Firebase authentication setup](firebase-auth-setup.md). **Authorized team members only:** the following impersonation command requires permission to act as the named service account. External contributors must configure ADC for their own Firebase project instead:
 
    ```bash
    gcloud auth application-default login \
@@ -175,7 +178,7 @@ This scenario uses the team's **real development Firebase project**, with a loca
    go run ./cmd/server
    ```
 
-5. In another terminal, confirm `curl -i http://127.0.0.1:8080/healthz` returns `200`, then configure [frontend scenario D](https://github.com/TravelMapMory/mapmory-frontend/blob/main/docs/environment-setup.md#scenario-d--full-local-stack-with-real-firebase) using Web SDK settings for **the same Firebase project**.
+5. In another terminal, confirm `curl -i http://127.0.0.1:8080/healthz` returns `200`, then configure [frontend scenario D](https://github.com/TravelMapMory/mapmory-frontend/blob/main/docs/environment-setup.md#scenario-d--full-local-stack-with-real-firebase) using Web SDK settings for **the same Firebase project**. If using your own project, replace `mapmory-development` in both configuration files.
 
 **Important:** Google ADC identifies the developer/backend to Google Cloud; it is **not** the Firebase ID token sent by a signed-in MapMory user. Get test-user credentials separately; see [Firebase authentication testing](firebase-auth-testing.md).
 
