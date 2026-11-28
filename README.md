@@ -8,25 +8,14 @@ The server supports **persistent database mode** for authenticated owner workflo
 
 **Requirements:** Go 1.26.1 (`go.mod`), Firebase Admin SDK initialization, and—in persistent mode—PostgreSQL 17 and Goose. Docker is used for the documented local database workflow.
 
-For the recommended **persistent local** setup:
+For the recommended **persistent local** setup, follow [Environment and local setup](docs/environment-setup.md) from start to finish. It covers copying `.env.example`, starting PostgreSQL, applying Goose migrations, configuring Firebase (development credentials or the Auth emulator), and selecting local photo storage. Then start the API:
 
-1. Follow [Environment and local setup](docs/environment-setup.md) to start PostgreSQL, configure Firebase (development credentials or a matching Auth emulator), and choose local photo storage.
-2. From the repository root, copy the example and protect it:
+```bash
+go run ./cmd/server
+curl -i http://127.0.0.1:8080/healthz
+```
 
-   ```bash
-   cp .env.example .env
-   chmod 600 .env
-   ```
-
-3. Apply **all Goose migrations** in `db/migrations/` (currently `00001`–`00009`) as described in [Database migrations](docs/database-migrations.md). Migrations are not applied automatically when the server starts.
-4. Start the server:
-
-   ```bash
-   go run ./cmd/server
-   curl -i http://127.0.0.1:8080/healthz
-   ```
-
-The example `.env` targets a loopback PostgreSQL instance and local photo storage, but **does not create PostgreSQL or configure Firebase credentials**. The server requires initialized Firebase Admin SDK credentials even in prototype mode. For the complete setup, including local database commands, start with the [environment guide](docs/environment-setup.md).
+The example `.env` targets localhost PostgreSQL and local photo storage, but **does not create PostgreSQL or configure Firebase credentials**. Migrations are not automatic, and Firebase Admin SDK initialization is required even in legacy prototype mode.
 
 ## Configuration
 
@@ -47,13 +36,19 @@ The server loads an allowlist of eight settings from the repository-root `.env`.
 
 Test-only `.env` keys (`FIREBASE_WEB_API_KEY`, `TEST_EMAIL`, `TEST_PASSWORD`, `FIREBASE_ID_TOKEN`) are consumed by the token helper, **not** the Go server. Never commit `.env`, passwords, tokens or service-account credentials.
 
-### Development modes
+### Development scenarios
 
-| Mode | Configuration | Behavior |
+| Scenario | When to use it | External services |
 | --- | --- | --- |
-| Legacy prototype | Firebase initialization; database flag `false` | Public, in-memory trips; no persistent private workflow |
-| Persistent local (recommended) | Firebase; database flag `true`; migrated PostgreSQL; `MAPMORY_PHOTO_STORAGE=local` | Private owner operations, signed local photo uploads and sharing; loopback-only |
-| Persistent GCS | Firebase; migrated PostgreSQL; `MAPMORY_PHOTO_STORAGE=gcs`; private bucket and signing permissions | Real upload/processing/sharing against GCS |
+| **A. Mock UI** | Frontend-only interface work | None; follow [frontend scenario A](https://github.com/TravelMapMory/mapmory-frontend/blob/main/docs/environment-setup.md#scenario-a--mock-ui-only) |
+| **B. Auth UI with mock data** | Test Firebase login screens | Local Firebase Auth emulator; follow [frontend scenario B](https://github.com/TravelMapMory/mapmory-frontend/blob/main/docs/environment-setup.md#scenario-b--firebase-auth-ui-with-mock-data) |
+| **C. Full local (recommended)** | Persistent upload → correct → share without cloud credentials | Local Auth emulator + PostgreSQL + local photo storage; optional Geoapify key |
+| **D. Real Firebase** | Check against the team development Firebase project | Development Firebase + authorized ADC + PostgreSQL + local photo storage; optional Geoapify key |
+| **E. GCS integration** | Check cloud-backed signed photo uploads | C or D plus a private development GCS bucket, bucket CORS and signing IAM |
+| **F. Tests** | Automated verification | Depends on test; see [Testing](docs/environment-setup.md#testing-by-dependency) |
+
+**Start with [the setup guide](docs/environment-setup.md)** for an [external-services and credentials checklist](docs/environment-setup.md#external-services-and-credentials-for-a-full-setup), the exact `.env` values and terminal commands for each scenario. Scenario C is the default for end-to-end local development; Geoapify is optional for uploading but needed to exercise automatic labels and place search.
+
 
 Database mode **fails startup** if PostgreSQL is unavailable; it does not fall back to memory. Local photo mode replaces GCS for development, not Firebase or PostgreSQL. The frontend and backend must use the **same Firebase project** for authenticated live requests.
 
@@ -88,7 +83,7 @@ For local API smoke tests, use [requests.http](requests.http) and the [Firebase 
 
 ## Deployment
 
-The production API runs on a Google Cloud VM behind Caddy, with PostgreSQL, private GCS photo storage and Firebase Authentication. Build the image using `docker build -t mapmory-backend .`. Runtime identity, secrets, database access and GCS signing permissions must be configured independently. See [Deployment](deploy/README.md) for VM and CI behavior.
+The production API runs on a Google Cloud VM behind Caddy, with **Supabase-hosted PostgreSQL**, private GCS photo storage and Firebase Authentication. Supabase is a hosting provider for PostgreSQL, **not a requirement for local development**; the recommended setup uses a local PostgreSQL 17 container. Build the image using `docker build -t mapmory-backend .`. Runtime identity, secrets, database access and GCS signing permissions must be configured independently. See [Deployment](deploy/README.md) for VM and CI behavior.
 
 Do not deploy the in-memory prototype or local filesystem photo mode publicly.
 
