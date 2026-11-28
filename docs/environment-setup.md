@@ -70,11 +70,26 @@ docker run -d \
   -p 127.0.0.1:5432:5432 \
   -v mapmory-postgres-data:/var/lib/postgresql/data \
   postgres:17
-
-docker exec mapmory-postgres pg_isready -U mapmory -d mapmory
 ```
 
-On later runs, use `docker start mapmory-postgres`. The example password and `sslmode=disable` are acceptable **only for this localhost-only development container**. If port 5432 is occupied, change the host port and `DATABASE_URL` together.
+Wait until PostgreSQL accepts connections before migrating (also after later `docker start mapmory-postgres` runs):
+
+```bash
+ready=false
+for attempt in {1..30}; do
+  if docker exec mapmory-postgres pg_isready -U mapmory -d mapmory >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" != true ]; then
+  echo "PostgreSQL did not become ready" >&2
+  exit 1
+fi
+```
+
+On later runs, use `docker start mapmory-postgres` before the readiness check. The example password and `sslmode=disable` are acceptable **only for this localhost-only development container**. If port 5432 is occupied, change the host port and `DATABASE_URL` together.
 
 **Configure `.env`:**
 
@@ -91,7 +106,7 @@ GEOAPIFY_API_KEY=
 
 The Geoapify key is optional. Without it, uploads and geographic browsing with existing coordinates still work, but automatic place labels and world-place search are unavailable.
 
-**Install Goose and apply all migrations:**
+**Install Goose and apply all migrations:** Goose does **not** load `.env` automatically, and the Go server **does not** run migrations at startup. The following commands explicitly read the local development database URL from your own `.env` file.
 
 ```bash
 go install github.com/pressly/goose/v3/cmd/goose@v3.29.0
@@ -100,7 +115,7 @@ goose -dir db/migrations postgres "$DATABASE_URL" up
 goose -dir db/migrations postgres "$DATABASE_URL" status
 ```
 
-Goose **does not automatically load `.env`**, and the Go server **does not run migrations at startup**. Apply all current migrations in [`db/migrations/`](../db/migrations/) (through `00009`). Avoid exporting a database URL from an untrusted `.env`; the shown command is for your own local file.
+Apply all current migrations in [`db/migrations/`](../db/migrations/) (through `00009`). Avoid exporting a database URL from an untrusted `.env`; the shown command is for your own local file.
 
 **Configure Firebase:** follow [Firebase authentication setup](firebase-auth-setup.md) for the shared `mapmory-development` project and keyless ADC, or use the emulator configuration in Section 3 below. `.env.example` does not provide usable Google credentials.
 
@@ -174,7 +189,7 @@ To verify authentication from a terminal, see [Firebase authentication testing](
 | Authenticated requests return `401` | Firebase project mismatch, expired ID token, Admin SDK credentials, or mismatched emulator configuration. |
 | Upload or sharing routes are absent | Persistent mode also requires a configured photo store and current migrations. |
 | Local photo mode rejects startup | `MAPMORY_PHOTO_BUCKET` must be empty; clear any exported bucket value too. |
-| Upload/display-image URLs fail | Confirm loopback host, local storage directory, content type, signing URL expiry, and Vite origin. |
+| Upload/display-image URLs fail | Confirm loopback host, local storage directory, content type, and signing URL expiry. Local storage CORS allows Vite origins on ports `5173`, `5174`, and `4173`; use `5173` for full live integration, not the auth-only `5180` test port. |
 | Geoapify labels or place search fail | Check backend `GEOAPIFY_API_KEY`; the frontend `VITE_GEOAPIFY_KEY` is for map tiles, not reverse geocoding. |
 | Goose cannot connect | It does not load `.env`; confirm the explicitly supplied URL points to the intended development database. |
 | Old signed local URLs fail after restart | Expected: local mode uses an ephemeral signing key; request fresh display URLs. |

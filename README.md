@@ -8,25 +8,14 @@ The server supports **persistent database mode** for authenticated owner workflo
 
 **Requirements:** Go 1.26.1 (`go.mod`), Firebase Admin SDK initialization, and—in persistent mode—PostgreSQL 17 and Goose. Docker is used for the documented local database workflow.
 
-For the recommended **persistent local** setup:
+For the recommended **persistent local** setup, follow [Environment and local setup](docs/environment-setup.md) from start to finish. It covers copying `.env.example`, starting PostgreSQL, applying Goose migrations, configuring Firebase (development credentials or the Auth emulator), and selecting local photo storage. Then start the API:
 
-1. Follow [Environment and local setup](docs/environment-setup.md) to start PostgreSQL, configure Firebase (development credentials or a matching Auth emulator), and choose local photo storage.
-2. From the repository root, copy the example and protect it:
+```bash
+go run ./cmd/server
+curl -i http://127.0.0.1:8080/healthz
+```
 
-   ```bash
-   cp .env.example .env
-   chmod 600 .env
-   ```
-
-3. Apply **all Goose migrations** in `db/migrations/` (currently `00001`–`00009`) as described in [Database migrations](docs/database-migrations.md). Migrations are not applied automatically when the server starts.
-4. Start the server:
-
-   ```bash
-   go run ./cmd/server
-   curl -i http://127.0.0.1:8080/healthz
-   ```
-
-The example `.env` targets a loopback PostgreSQL instance and local photo storage, but **does not create PostgreSQL or configure Firebase credentials**. The server requires initialized Firebase Admin SDK credentials even in prototype mode. For the complete setup, including local database commands, start with the [environment guide](docs/environment-setup.md).
+The example `.env` targets localhost PostgreSQL and local photo storage, but **does not create PostgreSQL or configure Firebase credentials**. Migrations are not automatic, and Firebase Admin SDK initialization is required even in legacy prototype mode.
 
 ## Configuration
 
